@@ -103,3 +103,5 @@ npm run build
 
 ## Conventions
 Branch from `main`, PR into `main` with one review. Components PascalCase, hooks `useX`, files kebab-case. No secrets in code; use `.env` (gitignored). API details are in `../backend/README.md`.
+
+
