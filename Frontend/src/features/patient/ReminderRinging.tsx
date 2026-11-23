@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { FamilyPhoto, Icon, TreeLines } from '../../components/ui';
-import { fmtTime } from '../../lib/demoData';
+import { fmtTime } from '../../lib/models';
 import { speak, stopSpeaking } from '../../lib/voice';
-import { useDemoStore } from '../../store/demoStore';
+import { cachedSchedule, setStatus, useFamily, useSchedule } from '../../lib/data';
+import { useUiStore } from '../../store/uiStore';
 import { KindBadge } from './schedule-ui';
 
 const SNOOZE_MS = 10 * 60 * 1000;
@@ -13,11 +14,12 @@ const hhmmNow = () => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
-/** Rings a reminder when its time comes (checked every 30 s). Reminders are scheduled on the device, so they ring offline. */
+/** Rings a reminder when its time comes (checked every 30 s). It reads the schedule already fetched from the API. */
 export const useReminderClock = () => {
   useEffect(() => {
     const check = () => {
-      const { schedule, rung, ringingId, ring } = useDemoStore.getState();
+      const { rung, ringingId, ring } = useUiStore.getState();
+      const schedule = cachedSchedule();
       if (ringingId) return;
       const now = hhmmNow();
       const due = schedule.find((s) => s.time === now && s.status !== 'done' && s.status !== 'snoozed' && !rung.includes(s.id));
@@ -34,12 +36,12 @@ export const useReminderClock = () => {
  * and two big answers. No countdown, no flashing.
  */
 export const ReminderRinging = () => {
-  const ringingId = useDemoStore((s) => s.ringingId);
-  const item = useDemoStore((s) => s.schedule.find((x) => x.id === s.ringingId) ?? null);
-  const family = useDemoStore((s) => s.family);
-  const setStatus = useDemoStore((s) => s.setStatus);
-  const stopRinging = useDemoStore((s) => s.stopRinging);
-  const ring = useDemoStore((s) => s.ring);
+  const ringingId = useUiStore((s) => s.ringingId);
+  const { schedule } = useSchedule();
+  const item = schedule.find((x) => x.id === ringingId) ?? null;
+  const { family } = useFamily();
+  const stopRinging = useUiStore((s) => s.stopRinging);
+  const ring = useUiStore((s) => s.ring);
   const who = item ? family.find((f) => f.name === item.voice) : undefined;
 
   const message = item ? `It's ${who?.name ?? 'your family'}. It is time for ${item.title.toLowerCase()}. ${item.detail}.` : '';
@@ -69,7 +71,7 @@ export const ReminderRinging = () => {
     snoozeTimers.set(
       item.id,
       window.setTimeout(() => {
-        const cur = useDemoStore.getState().schedule.find((s) => s.id === item.id);
+        const cur = cachedSchedule().find((s) => s.id === item.id);
         if (cur && cur.status === 'snoozed') ring(item.id);
       }, SNOOZE_MS),
     );

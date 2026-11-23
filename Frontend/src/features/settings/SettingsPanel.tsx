@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Icon, Section } from '../../components/ui';
 import { LANG_LABEL } from '../../i18n/strings';
 import { canSpeak, speak } from '../../lib/voice';
-import { useDemoStore, type Lang, type Settings } from '../../store/demoStore';
+import { useUiStore, type Lang, type Settings } from '../../store/uiStore';
 
 /** A row of big pill choices — one tap, no dropdowns (easier for elders). */
 const Choice = <T extends string>({ value, options, onChange, label }: { value: T; options: [T, ReactNode][]; onChange: (v: T) => void; label: string }) => (
@@ -35,8 +35,8 @@ const Row = ({ title, hint, children }: { title: string; hint: string; children:
 
 /** Language, text size and voice — used by the patient and by the caregiver on the patient's behalf. */
 export const SettingsPanel = ({ forName }: { forName?: string }) => {
-  const settings = useDemoStore((s) => s.settings);
-  const set = useDemoStore((s) => s.setSettings);
+  const settings = useUiStore((s) => s.settings);
+  const set = useUiStore((s) => s.setSettings);
   const update = (p: Partial<Settings>) => set(p);
 
   return (

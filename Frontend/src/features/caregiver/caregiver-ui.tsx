@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { Avatar, Icon } from '../../components/ui';
-import { activityBaseline, careTeam, weekActivity, type AlertLevel } from '../../lib/demoData';
-import { useDemoStore } from '../../store/demoStore';
+import { type AlertLevel } from '../../lib/models';
+import { useProgress, useTeam } from '../../lib/live';
+import { acknowledge, useAlerts } from '../../lib/data';
 
 /** A stat tile: label, the big figure, one line of context. */
 export const StatTile = ({
@@ -31,6 +32,8 @@ export const StatTile = ({
 
 /** Weekly activity bars vs her own baseline (dashed line). No scores, no comparison with others. */
 export const ActivityChart = () => {
+  const { weekActivity, activityBaseline } = useProgress();
+  if (!weekActivity.length) return <p className="text-sm text-ohara-muted">No activity recorded yet this week.</p>;
   const max = Math.max(...weekActivity.map((d) => d.minutes), activityBaseline) * 1.15;
   const basePct = (activityBaseline / max) * 100;
   return (
@@ -80,8 +83,7 @@ const LEVEL: Record<AlertLevel, { dot: string; chip: string; label: string }> = 
 
 /** Alert rows with a working Acknowledge button. */
 export const AlertList = ({ limit, filter = 'all' }: { limit?: number; filter?: 'all' | 'open' | 'done' }) => {
-  const alerts = useDemoStore((s) => s.alerts);
-  const acknowledge = useDemoStore((s) => s.acknowledge);
+  const { alerts } = useAlerts();
   const list = alerts.filter((a) => (filter === 'open' ? !a.acknowledged : filter === 'done' ? a.acknowledged : true)).slice(0, limit);
 
   if (!list.length)
@@ -128,7 +130,9 @@ export const AlertList = ({ limit, filter = 'all' }: { limit?: number; filter?: 
   );
 };
 
-export const TeamList = ({ compact }: { compact?: boolean }) => (
+export const TeamList = ({ compact }: { compact?: boolean }) => {
+  const careTeam = useTeam();
+  return (
   <ul className={compact ? 'flex flex-col gap-1' : 'grid grid-cols-1 gap-4 md:grid-cols-2'}>
     {careTeam.map((m) => (
       <li key={m.id} className={`flex items-center gap-3 ${compact ? 'rounded-lg px-1 py-2' : 'card p-5'}`}>
@@ -141,4 +145,5 @@ export const TeamList = ({ compact }: { compact?: boolean }) => (
       </li>
     ))}
   </ul>
-);
+  );
+};

@@ -1,4 +1,4 @@
-import { useDemoStore, type Lang } from '../store/demoStore';
+import { useUiStore, type Lang } from '../store/uiStore';
 
 /**
  * Speech through the browser's built-in voice (Web Speech API).
@@ -17,7 +17,7 @@ const pickVoice = (code: string) => {
 /** Speak text using the patient's settings. Cancels anything already speaking. Returns false if muted/unsupported. */
 export function speak(text: string, opts: { lang?: Lang; force?: boolean } = {}): boolean {
   if (!canSpeak()) return false;
-  const { settings } = useDemoStore.getState();
+  const { settings } = useUiStore.getState();
   if (!settings.voiceOn && !opts.force) return false;
   const synth = window.speechSynthesis;
   synth.cancel();

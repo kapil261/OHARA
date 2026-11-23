@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { Outlet, useOutletContext } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell';
 import { Avatar, Icon, Page, PageHeader, Section, Sparkline } from '../../components/ui';
-import { hwPatients, type HwPatient, type HwStatus } from '../../lib/demoData';
+import { useHwPatients } from '../../lib/live';
+import { type HwPatient, type HwStatus } from '../../lib/models';
 import type { MeResponse } from '../../types';
 
 const ORDER: Record<HwStatus, number> = { attention: 0, watch: 1, stable: 2 };
@@ -14,6 +15,7 @@ const STATUS: Record<HwStatus, { label: string; chip: string; line: string }> = 
 
 export const HealthWorkerLayout = () => {
   const me = useOutletContext<MeResponse>();
+  const { patients: hwPatients } = useHwPatients();
   const attention = hwPatients.filter((p) => p.status === 'attention').length;
   return (
     <AppShell
@@ -28,14 +30,16 @@ export const HealthWorkerLayout = () => {
 /** Health worker: every patient, sorted by "needs attention", with a per-patient side panel. */
 export const HealthWorkerPatients = () => {
   const [q, setQ] = useState('');
-  const [selected, setSelected] = useState<string>(hwPatients[0].id);
+  const { patients: hwPatients, loading } = useHwPatients();
+  const [picked, setSelected] = useState<string>('');
+  const selected = picked || hwPatients[0]?.id || '';
 
   const rows = useMemo(
     () =>
       hwPatients
         .filter((p) => `${p.name} ${p.village}`.toLowerCase().includes(q.toLowerCase()))
         .sort((a, b) => ORDER[a.status] - ORDER[b.status]),
-    [q],
+    [q, hwPatients],
   );
   const sel = hwPatients.find((p) => p.id === selected) ?? null;
   const count = (s: HwStatus) => hwPatients.filter((p) => p.status === s).length;
@@ -45,7 +49,7 @@ export const HealthWorkerPatients = () => {
       <PageHeader
         eyebrow="Titabar block · 3 villages"
         title="Your patients"
-        lead="Sorted so the people who need you most are on top. Each person is compared only with their own usual."
+        lead={loading ? 'Loading your patients…' : 'Sorted so the people who need you most are on top. Each person is compared only with their own usual.'}
         actions={
           <label className="relative block w-full sm:w-72">
             <Icon.Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-ohara-muted" />

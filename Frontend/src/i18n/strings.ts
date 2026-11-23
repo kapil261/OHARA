@@ -1,4 +1,4 @@
-import { useDemoStore, type Lang } from '../store/demoStore';
+import { useUiStore, type Lang } from '../store/uiStore';
 
 /**
  * Patient-mode strings in English, Assamese and Hindi.
@@ -81,4 +81,4 @@ const hi: Strings = {
 export const STRINGS: Record<Lang, Strings> = { en, as, hi };
 export const LANG_LABEL: Record<Lang, string> = { en: 'English', as: 'অসমীয়া (Assamese)', hi: 'हिन्दी (Hindi)' };
 
-export const useT = () => STRINGS[useDemoStore((s) => s.settings.lang)];
+export const useT = () => STRINGS[useUiStore((s) => s.settings.lang)];

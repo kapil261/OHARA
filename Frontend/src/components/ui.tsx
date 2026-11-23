@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import type { FamilyMember, Hue } from '../lib/demoData';
+import type { FamilyMember, Hue } from '../lib/models';
 
 /* ------------------------------------------------------------------ */
 /* Brand                                                               */

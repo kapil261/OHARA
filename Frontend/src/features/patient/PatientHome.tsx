@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom';
 import { useGateMe } from '../../app/AppGate';
 import { ActionTile, FamilyPhoto, Icon, Page, Section, TreeLines } from '../../components/ui';
 import { useT } from '../../i18n/strings';
-import { demoPatient, fmtTime } from '../../lib/demoData';
+import { fmtTime } from '../../lib/models';
+import { usePatientInfo } from '../../lib/live';
 import { speak, stopSpeaking } from '../../lib/voice';
-import { useDemoStore } from '../../store/demoStore';
+import { useFamily, useSchedule } from '../../lib/data';
+import { useUiStore } from '../../store/uiStore';
 import { KindBadge, StatusChip, nextItem } from './schedule-ui';
 
 /**
@@ -13,18 +15,19 @@ import { KindBadge, StatusChip, nextItem } from './schedule-ui';
  * then today's routine next to a family strip. One action per tile, icons plus voice.
  */
 export const PatientHome = () => {
+  const demoPatient = usePatientInfo();
   const me = useGateMe();
   const t = useT();
   const name = me.patient?.displayName || demoPatient.displayName;
-  const schedule = useDemoStore((s) => s.schedule);
-  const family = useDemoStore((s) => s.family);
+  const { schedule } = useSchedule();
+  const { family } = useFamily();
   const [speaking, setSpeaking] = useState(false);
   const next = nextItem(schedule);
   const done = schedule.filter((s) => s.status === 'done').length;
   const now = new Date();
   const h = now.getHours();
   const hello = h < 12 ? t.goodMorning : h < 17 ? t.goodAfternoon : t.goodEvening;
-  const lang = useDemoStore((s) => s.settings.lang);
+  const lang = useUiStore((s) => s.settings.lang);
   const today = now.toLocaleDateString(`${lang}-IN`, { weekday: 'long', day: 'numeric', month: 'long' });
   const evening = h >= 17;
 

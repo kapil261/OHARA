@@ -2,8 +2,9 @@ import { Link, Outlet, useOutletContext } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell';
 import { Icon } from '../../components/ui';
 import { useT } from '../../i18n/strings';
-import { demoPatient } from '../../lib/demoData';
-import { useDemoStore } from '../../store/demoStore';
+import { usePatientInfo } from '../../lib/live';
+import { useSchedule } from '../../lib/data';
+import { useUiStore } from '../../store/uiStore';
 import type { MeResponse } from '../../types';
 import { ReminderRinging, useReminderClock } from './ReminderRinging';
 
@@ -13,10 +14,11 @@ import { ReminderRinging, useReminderClock } from './ReminderRinging';
  * Forwards the AppGate context to the inner Outlet so pages can read it via useGateMe().
  */
 export const PatientLayout = () => {
+  const demoPatient = usePatientInfo();
   const me = useOutletContext<MeResponse>();
   const t = useT();
-  const pending = useDemoStore((s) => s.schedule.filter((x) => x.status !== 'done').length);
-  const textSize = useDemoStore((s) => s.settings.textSize);
+  const pending = useSchedule().schedule.filter((x) => x.status !== 'done').length;
+  const textSize = useUiStore((s) => s.settings.textSize);
   const name = me.patient?.displayName ?? demoPatient.displayName;
   useReminderClock();
 

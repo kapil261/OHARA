@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { FamilyPhoto, HUE, Icon, Page, PageHeader } from '../../components/ui';
-import { demoPatient } from '../../lib/demoData';
+import { usePatientInfo } from '../../lib/live';
 import { speak, stopSpeaking } from '../../lib/voice';
-import { useDemoStore } from '../../store/demoStore';
+import { useFamily } from '../../lib/data';
 
-/** My Family: photo cards; "Hear voice" speaks a greeting from that person (real recorded clips arrive with the backend). */
+/** My Family: photo cards; "Hear voice" speaks a greeting from that person (family list from GET /patients/:id/family). */
 export const FamilyPage = () => {
-  const family = useDemoStore((s) => s.family);
+  const demoPatient = usePatientInfo();
+  const { family, loading } = useFamily();
   const [playing, setPlaying] = useState<string | null>(null);
 
   useEffect(
@@ -34,6 +35,7 @@ export const FamilyPage = () => {
     <Page>
       <PageHeader eyebrow="My Family" title="Your family tree" lead="The people who love you. Touch a picture to hear their voice." />
 
+      {loading && <p className="text-lg text-ohara-muted">Loading your family…</p>}
       <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
         {family.map((f, i) => {
           const on = playing === f.id;

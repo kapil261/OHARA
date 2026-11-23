@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BigButton, BrandMark, Icon } from '../../components/ui';
-import { setDemoRole } from '../../lib/devBypass';
 
 const STEPS = ['About you', 'Consent', 'Pair device'] as const;
 
@@ -131,7 +130,6 @@ export const OnboardingPage = () => {
                   Back
                 </BigButton>
                 <BigButton variant="primary" className="sm:flex-[2]" onClick={() => {
-                    setDemoRole('PATIENT');
                     navigate('/patient', { replace: true });
                   }}>
                   Done

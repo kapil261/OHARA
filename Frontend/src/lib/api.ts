@@ -21,16 +21,42 @@ function authHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * Swaps the httpOnly refresh cookie for a new access token (on reload, or when the 15-min token expires).
+ * Concurrent 401s share one refresh call.
+ */
+let refreshing: Promise<boolean> | null = null;
+export function refreshSession(): Promise<boolean> {
+  refreshing ??= fetch(`${API_BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
+    .then(async (r) => {
+      if (!r.ok) return false;
+      const { token, me } = (await r.json()) as { token: string; me: import('../types').MeResponse };
+      useAuthStore.getState().setAuth(me, token);
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
+async function request<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...authHeader(), ...(init.headers as Record<string, string>) },
     ...init,
+    // Sends the httpOnly refresh cookie set by /auth/otp/verify.
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...authHeader(), ...(init.headers as Record<string, string>) },
   });
   const text = await res.text();
   const body = (text ? safeJson(text) : null) as ApiBody | null;
+  if (res.status === 401 && !retried && !path.startsWith('/auth/') && (await refreshSession())) {
+    return request<T>(path, init, true);
+  }
   if (!res.ok) {
-    const msg = (body && (body.message || body.error)) || res.statusText;
-    throw new ApiError(msg, res.status, body?.code);
+    // Backend errors look like { error: { code, message } }.
+    const msg = body?.error?.message ?? body?.message ?? res.statusText;
+    throw new ApiError(msg, res.status, body?.error?.code ?? body?.code);
   }
   return body as T;
 }
@@ -43,7 +69,7 @@ function safeJson(text: string): unknown {
   }
 }
 
-type ApiBody = { message?: string; error?: string; code?: string } & Record<string, unknown>;
+type ApiBody = { message?: string; code?: string; error?: { code?: string; message?: string } } & Record<string, unknown>;
 
 export const api = {
   get: <T>(path: string, init?: RequestInit) => request<T>(path, { ...init, method: 'GET' }),

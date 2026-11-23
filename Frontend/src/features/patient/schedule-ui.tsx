@@ -1,5 +1,5 @@
 import { Icon } from '../../components/ui';
-import type { ScheduleItem, ScheduleKind, ScheduleStatus } from '../../lib/demoData';
+import type { ScheduleItem, ScheduleKind, ScheduleStatus } from '../../lib/models';
 
 export const KIND: Record<ScheduleKind, { icon: (p: { className?: string }) => JSX.Element; tint: string }> = {
   medicine: { icon: Icon.Pill, tint: 'bg-ohara-ind-soft text-ohara-ind-ink' },

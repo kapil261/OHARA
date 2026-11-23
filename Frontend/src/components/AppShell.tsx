@@ -1,11 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { clearDemo } from '../lib/devBypass';
-import type { Hue } from '../lib/demoData';
+import { api } from '../lib/api';
+import type { Hue } from '../lib/models';
 import { stopSpeaking } from '../lib/voice';
 import { useAuthStore } from '../store/authStore';
-import { useDemoStore } from '../store/demoStore';
+import { useUiStore } from '../store/uiStore';
 import { Avatar, BrandMark, Icon } from './ui';
 
 export interface NavItem {
@@ -62,23 +62,21 @@ export const AppShell = ({
   const navigate = useNavigate();
   const qc = useQueryClient();
   const clearAuth = useAuthStore((s) => s.clearAuth);
-  const resetDemo = useDemoStore((s) => s.reset);
   const [resetDone, setResetDone] = useState(false);
 
   const signOut = () => {
     stopSpeaking();
-    clearDemo();
+    // Revokes the refresh cookie; the in-memory token is dropped below either way.
+    void api.post('/auth/logout').catch(() => {});
     clearAuth();
-    // Demo data is kept on sign-out so you can switch roles and see the other side
-    // (e.g. Bina's games on the caregiver dashboard). Refresh or "Reset demo" clears it.
-    useDemoStore.getState().stopRinging();
+    useUiStore.getState().reset();
     qc.clear();
     navigate('/login', { replace: true });
   };
 
+  /** Refetch every screen's data from the API. */
   const onReset = () => {
-    stopSpeaking();
-    resetDemo();
+    void qc.invalidateQueries();
     setResetDone(true);
     window.setTimeout(() => setResetDone(false), 1800);
   };
@@ -141,7 +139,7 @@ export const AppShell = ({
             </button>
           </div>
           <button type="button" onClick={onReset} className="flex items-center justify-center gap-2 rounded-pill py-1.5 text-[12px] font-semibold text-white/45 hover:text-white/80">
-            <Icon.Refresh className="h-3.5 w-3.5" /> {resetDone ? 'Demo reset' : 'Reset demo'}
+            <Icon.Refresh className="h-3.5 w-3.5" /> {resetDone ? 'Refreshed' : 'Refresh data'}
           </button>
         </div>
       </aside>
@@ -151,7 +149,7 @@ export const AppShell = ({
         <div className="flex items-center justify-between">
           <BrandMark onDark small />
           <div className="flex items-center gap-1">
-            <button type="button" onClick={onReset} className="grid h-10 w-10 place-items-center rounded-pill text-white/60 hover:bg-white/10" aria-label="Reset demo" title="Reset demo">
+            <button type="button" onClick={onReset} className="grid h-10 w-10 place-items-center rounded-pill text-white/60 hover:bg-white/10" aria-label="Refresh data" title="Refresh data">
               <Icon.Refresh className="h-5 w-5" />
             </button>
             <button type="button" onClick={signOut} className="inline-flex items-center gap-2 rounded-pill px-3 py-2 text-sm font-semibold text-white/80 hover:bg-white/10">

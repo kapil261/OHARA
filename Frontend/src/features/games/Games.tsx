@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, useParams } from 'react-router-dom';
 import { FamilyPhoto, Icon } from '../../components/ui';
-import { games } from '../../lib/demoData';
+import { games } from '../../lib/models';
 import { playSound, type SoundId } from '../../lib/sounds';
 import { speak } from '../../lib/voice';
-import { useDemoStore } from '../../store/demoStore';
+import { useFamily } from '../../lib/data';
 import { Session, shuffle, type SessionStats } from './engine';
 import { ChoiceButton, GameFrame, HintNote, WinScreen } from './GameFrame';
 import { useChoiceGame } from './useChoiceGame';
@@ -14,7 +14,7 @@ import { useChoiceGame } from './useChoiceGame';
 /* ------------------------------------------------------------------ */
 
 const WhoIsThis = ({ onAgain }: { onAgain: () => void }) => {
-  const family = useDemoStore((s) => s.family);
+  const { family } = useFamily();
   const g = useChoiceGame('who-is-this', () => {
     const picks = shuffle(family).slice(0, Math.min(4, family.length));
     return {
