@@ -1,0 +1,221 @@
+OHARA — Test Results
+========================================================================
+Date        : 2026-11-23
+Branch      : kapil/feat/frontend (uncommitted working tree)
+Backend     : http://localhost:4000/api  (Express 5 + Prisma, local Postgres, seed data)
+Frontend    : http://localhost:5173      (React + Vite)
+Features    : smtp=off (OTP printed to backend log), cloudinary=off, push=off
+Test users  : arup@example.com (caregiver, Bina), dr.bora@example.com (health worker),
+              pranab@example.com (caregiver of a different patient)
+
+SUMMARY
+------------------------------------------------------------------------
+  Backend typecheck (tsc --noEmit)        PASS
+  Backend unit/integration tests (vitest) PASS  18/18 tests, 4 files
+  Backend build (tsc)                     PASS
+  Frontend typecheck (tsc --noEmit)       PASS
+  Frontend production build (vite)        PASS  JS 320 kB (98 kB gzip), CSS 43 kB
+  Frontend unit tests                     N/A   no test files exist yet
+  Live end-to-end API tests               PASS  61/61
+
+1. STATIC CHECKS
+------------------------------------------------------------------------
+  cd backend  && npm run typecheck   -> no errors
+  cd backend  && npm test            -> Test Files 4 passed, Tests 18 passed
+  cd backend  && npm run build       -> no errors
+  cd Frontend && npm run typecheck   -> no errors
+  cd Frontend && npm run build       -> built OK
+  cd Frontend && npx vitest run      -> "No test files found" (none written yet)
+
+2. LIVE END-TO-END API TESTS
+------------------------------------------------------------------------
+  Real HTTP calls against the running backend. Each login requests an OTP,
+  tries a wrong code first, then reads the real code from the backend log.
+  Patient ids are shown as :id.
+
+
+  [Public]
+   1. PASS  GET    /health  -> 200
+         Health check  (status={"ok":true,"service":"ohara-backend","ti)
+   2. PASS  GET    /nope  -> 404
+         Unknown route returns JSON 404  (NOT_FOUND)
+
+  [Security]
+   3. PASS  GET    /me  -> 401
+         No token is rejected
+   4. PASS  GET    /me  -> 401
+         Garbage token is rejected
+
+  [Validation]
+   5. PASS  POST   /auth/otp/request  -> 400
+         Bad email is rejected
+
+  [Security]
+   6. PASS  GET    /health  -> 200
+         CORS allows the frontend origin  (allow-origin=http://localhost:5173)
+   7. PASS  GET    /health  -> 200
+         CORS blocks other origins  (allow-origin=null)
+
+  [Auth]
+   8. PASS  POST   /auth/otp/request  -> 200
+         Request code (arup@example.com)
+   9. PASS  POST   /auth/otp/verify  -> 400
+         Wrong code rejected (arup@example.com)
+  10. PASS  POST   /auth/otp/verify  -> 200
+         Verify code (arup@example.com)  (role=CAREGIVER, refresh cookie set)
+
+  [Caregiver]
+  11. PASS  GET    /me  -> 200
+         Load profile  (patient=Bina)
+  12. PASS  GET    /patients/:id  -> 200
+         Patient details  (Bina, 72, Jorhat, Assam)
+  13. PASS  GET    /patients/:id/family  -> 200
+         Family page  (6 members)
+  14. PASS  GET    /patients/:id/schedule  -> 200
+         Today schedule (Home/Reminders)  (6 items)
+  15. PASS  GET    /patients/:id/reminders  -> 200
+         Reminder list  (6 reminders)
+  16. PASS  GET    /patients/:id/alerts?status=all  -> 200
+         Alerts (all)  (4 alerts)
+  17. PASS  GET    /patients/:id/sessions?limit=50  -> 200
+         Game sessions  (18 sessions)
+  18. PASS  GET    /patients/:id/games  -> 200
+         Games list  (4 games)
+  19. PASS  GET    /patients/:id/progress  -> 200
+         Progress (7-day activity)  (7 days, baseline=16)
+  20. PASS  GET    /patients/:id/team  -> 200
+         Care team  (4 members)
+  21. PASS  GET    /patients/:id/report.pdf  -> 403
+         Weekly report PDF blocked without "export" permission  (no export permission)
+  22. PASS  GET    /patients/:id/consent  -> 200
+         Consent records
+  23. PASS  GET    /patients/:id/devices  -> 200
+         Devices
+  24. PASS  GET    /patients/:id/media  -> 200
+         Media list
+
+  [Reminders]
+  25. PASS  POST   /patients/:id/reminders  -> 201
+         Add reminder  (id=:id)
+  26. PASS  PATCH  /patients/:id/reminders/:id  -> 200
+         Edit reminder  (title updated)
+  27. PASS  POST   /patients/:id/reminders/:id/events  -> 200
+         Snooze reminder
+  28. PASS  POST   /patients/:id/reminders/:id/events  -> 200
+         Mark reminder done
+  29. PASS  GET    /patients/:id/schedule  -> 200
+         Schedule shows it as done  (status=done)
+  30. PASS  DELETE /patients/:id/reminders/:id  -> 204
+         Delete reminder
+  31. PASS  GET    /patients/:id/schedule  -> 200
+         Deleted reminder gone from schedule  (not listed)
+
+  [Validation]
+  32. PASS  POST   /patients/:id/reminders  -> 400
+         Reminder with bad time rejected
+  33. PASS  POST   /patients/:id/reminders  -> 400
+         Reminder with empty title rejected
+
+  [Family]
+  34. PASS  POST   /patients/:id/family  -> 201
+         Add family member  (id=:id)
+  35. PASS  GET    /patients/:id/family  -> 200
+         Family list includes new member  (listed)
+  36. PASS  PATCH  /patients/:id/family/:id  -> 200
+         Edit family member
+  37. PASS  DELETE /patients/:id/family/:id  -> 403
+         Remove family member without "delete" permission is blocked  (403 FORBIDDEN as designed: arup has view/schedule/upload only)
+  38. PASS  GET    /patients/:id/family  -> 200
+         Member still listed after blocked delete  (still listed (correct))
+
+  [Validation]
+  39. PASS  POST   /patients/:id/family  -> 400
+         Family member without name rejected
+
+  [Games]
+  40. PASS  POST   /patients/:id/sessions  -> 201
+         Record finished game
+
+  [SOS]
+  41. PASS  POST   /patients/:id/sos  -> 201
+         Send SOS
+
+  [Alerts]
+  42. PASS  GET    /patients/:id/alerts  -> 200
+         Unacknowledged alerts include SOS  (found "SOS pressed")
+  43. PASS  POST   /patients/:id/alerts/:id/ack  -> 200
+         Acknowledge SOS alert
+  44. PASS  GET    /patients/:id/alerts?status=all  -> 200
+         Alert now acknowledged  (acknowledged=true)
+
+  [Auth]
+  45. PASS  POST   /auth/refresh  -> 200
+         Refresh token (cookie) issues new token  (new token)
+  46. PASS  POST   /auth/otp/request  -> 200
+         Request code (dr.bora@example.com)
+  47. PASS  POST   /auth/otp/verify  -> 400
+         Wrong code rejected (dr.bora@example.com)
+  48. PASS  POST   /auth/otp/verify  -> 200
+         Verify code (dr.bora@example.com)  (role=HEALTH_WORKER, refresh cookie set)
+
+  [Health worker]
+  49. PASS  GET    /health-worker/patients  -> 200
+         Patient list  (1 patients: Bina Kalita)
+  50. PASS  GET    /patients/:id/schedule  -> 200
+         Open a listed patient's schedule  (6 items)
+
+  [Security]
+  51. PASS  GET    /health-worker/patients  -> 403
+         Caregiver (arup) blocked from health-worker patient list
+
+  [Auth]
+  52. PASS  POST   /auth/otp/request  -> 200
+         Request code (pranab@example.com)
+  53. PASS  POST   /auth/otp/verify  -> 400
+         Wrong code rejected (pranab@example.com)
+  54. PASS  POST   /auth/otp/verify  -> 200
+         Verify code (pranab@example.com)  (role=CAREGIVER, refresh cookie set)
+
+  [Security]
+  55. PASS  GET    /patients/:id/family  -> 403
+         Other caregiver can't read Bina's family
+  56. PASS  POST   /patients/:id/reminders  -> 403
+         Other caregiver can't add Bina's reminder
+  57. PASS  POST   /patients/:id/sos  -> 403
+         Other caregiver can't send SOS for Bina
+
+  [Caregiver 2]
+  58. PASS  GET    /patients/:id/schedule  -> 200
+         Own patient schedule works  (3 items)
+
+  [Auth]
+  59. PASS  POST   /auth/logout  -> 204
+         Logout
+  60. PASS  POST   /auth/refresh  -> 401
+         Refresh fails after logout
+
+  [Frontend]
+  61. PASS  GET    http://localhost:5173/  -> 200
+         Vite dev server serves the app
+
+  TOTAL: 61/61 passed
+
+3. NOTES
+------------------------------------------------------------------------
+  * Rate limiting works. An earlier run made right after manual logins got
+    429 RATE_LIMITED on all 3 OTP requests (limit: 5 codes per IP per 15 min).
+    The backend was restarted to clear the in-memory counter before this run.
+  * Tests 38-39: arup is not allowed to delete family members (seed gives him
+    view/schedule/upload only). The 403 is correct. In the UI, the "remove"
+    button is still shown to him and fails quietly (logged to console only).
+    Worth hiding or showing a message for users without "delete".
+  * Weekly report PDF returns 403 for arup for the same reason (no "export").
+    rina@example.com (owner) has full permissions.
+  * Cleanup: the test reminder was deleted by the test; the test family member
+    ("E2E Test Cousin") was removed from the DB afterwards. One SOS alert
+    (acknowledged) and one memory-match game session remain as test records.
+  * Not covered: Cloudinary uploads, real SMTP email, web push, and browser
+    UI clicks (only the API calls the UI makes were tested).
+
+How to rerun: start Postgres (npm run db:local), backend (npm run dev) and
+frontend (npm run dev), then run the e2e script with the backend log path.

@@ -1,14 +1,15 @@
 import { Link, Outlet, useOutletContext } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell';
 import { Avatar, Icon } from '../../components/ui';
-import { demoPatient } from '../../lib/demoData';
-import { useDemoStore } from '../../store/demoStore';
+import { usePatientInfo } from '../../lib/live';
+import { useAlerts } from '../../lib/data';
 import type { MeResponse } from '../../types';
 
 /** Caregiver: the Hawkr frame at normal size, with the patient being cared for pinned in the sidebar. */
 export const CaregiverLayout = () => {
+  const demoPatient = usePatientInfo();
   const me = useOutletContext<MeResponse>();
-  const open = useDemoStore((s) => s.alerts.filter((a) => !a.acknowledged).length);
+  const open = useAlerts().alerts.filter((a) => !a.acknowledged).length;
 
   return (
     <AppShell

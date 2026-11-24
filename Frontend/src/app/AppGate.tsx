@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { Navigate, Outlet, useLocation, useOutletContext } from 'react-router-dom';
 import { isApiError } from '../lib/api';
-import { useDevBypass } from '../lib/devBypass';
 import { useMe } from '../lib/queries';
 import { FullPageLoader, Door } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
@@ -37,9 +36,7 @@ const HOME_PATH = (role: string) => {
  */
 export const AppGate = () => {
   const location = useLocation();
-  const demo = useDevBypass();
-  const real = useMe(!demo);
-  const me = demo ? { data: demo, isError: false as const, isPending: false as const, error: null } : real;
+  const me = useMe(true);
   const setAuth = useAuthStore((s) => s.setAuth);
 
   useEffect(() => {

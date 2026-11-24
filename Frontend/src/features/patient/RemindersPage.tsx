@@ -1,16 +1,16 @@
 import { Icon, Page, PageHeader, TreeLines } from '../../components/ui';
-import { fmtTime } from '../../lib/demoData';
-import { useDemoStore } from '../../store/demoStore';
+import { fmtTime } from '../../lib/models';
+import { setStatus, useSchedule } from '../../lib/data';
+import { useUiStore } from '../../store/uiStore';
 import { KindBadge, StatusChip, nextItem } from './schedule-ui';
 
 /** Reminders: today's routine. Done / Later change the state everywhere (demo store). */
 export const RemindersPage = () => {
-  const schedule = useDemoStore((s) => s.schedule);
-  const setStatus = useDemoStore((s) => s.setStatus);
-  const ring = useDemoStore((s) => s.ring);
+  const { schedule } = useSchedule();
+  const ring = useUiStore((s) => s.ring);
   const next = nextItem(schedule);
   const done = schedule.filter((s) => s.status === 'done').length;
-  const pct = Math.round((done / schedule.length) * 100);
+  const pct = schedule.length ? Math.round((done / schedule.length) * 100) : 0;
 
   return (
     <Page>

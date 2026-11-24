@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon, Page, TreeLines, TreeMark } from '../../components/ui';
 import { speak, stopSpeaking } from '../../lib/voice';
-import { useDemoStore } from '../../store/demoStore';
+import { recordSession } from '../../lib/data';
 import type { SessionStats } from './engine';
 
 /** Progress as leaves on a branch — how far along, never a score. */
@@ -68,7 +68,7 @@ export const HintNote = ({ text }: { text: string | null }) =>
 
 /** Every session ends here, on a win. Records the session (for the caregiver) exactly once. */
 export const WinScreen = ({ gameId, gameTitle, stats, onAgain }: { gameId: string; gameTitle: string; stats: SessionStats; onAgain: () => void }) => {
-  const record = useDemoStore((s) => s.recordSession);
+  const record = recordSession;
   const saved = useRef(false);
   useEffect(() => {
     if (!saved.current) {

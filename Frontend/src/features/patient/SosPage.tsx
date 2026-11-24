@@ -1,16 +1,20 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Avatar, HoldToConfirm, Icon } from '../../components/ui';
-import { careTeam } from '../../lib/demoData';
-import { useDemoStore } from '../../store/demoStore';
+import { useTeam } from '../../lib/live';
+import { sendSos } from '../../lib/data';
+import { useUiStore } from '../../store/uiStore';
 
-/**
- * SOS: hold-to-confirm that works offline. All writes go through the Dexie outbox first,
- * so a hold here still sends even without network. Calm, no countdown, no red crosses.
- */
+/** SOS: hold-to-confirm sends POST /patients/:id/sos; the server alerts the care team. Calm, no countdown. */
 export const SosPage = () => {
-  const sent = useDemoStore((s) => s.sosSent);
-  const sendSos = useDemoStore((s) => s.sendSos);
-  const contacts = careTeam.slice(0, 2);
+  const sent = useUiStore((s) => s.sosSent);
+  const setSent = useUiStore((s) => s.setSosSent);
+  const [failed, setFailed] = useState(false);
+  const onConfirm = () => {
+    setFailed(false);
+    void sendSos().then((ok) => (ok ? setSent(true) : setFailed(true)));
+  };
+  const contacts = useTeam().slice(0, 2);
 
   return (
     <div className={`flex min-h-full flex-col items-center justify-center gap-10 px-4 py-10 transition-colors duration-500 ${sent ? 'bg-ohara-tea-soft' : 'bg-ohara-cri-soft'}`}>
@@ -23,9 +27,10 @@ export const SosPage = () => {
         </p>
       </div>
 
-      <HoldToConfirm onConfirm={sendSos} done={sent}>
+      <HoldToConfirm onConfirm={onConfirm} done={sent}>
         Hold to call for help
       </HoldToConfirm>
+      {failed && <p role="alert" className="text-lg font-semibold text-ohara-cri-ink">Could not send. Please call your family directly.</p>}
 
       <div className="flex w-full max-w-2xl animate-rise flex-col gap-4" style={{ animationDelay: '120ms' }}>
         <p className="text-center text-base font-semibold text-ohara-muted">{sent ? 'We told' : 'We will tell'}</p>

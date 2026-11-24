@@ -1,0 +1,381 @@
+// OHARA data model. Database: Supabase Postgres.
+// DATABASE_URL = pooled (6543, pgbouncer=true) for runtime; DIRECT_URL = 5432 for migrations.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  PATIENT
+  CAREGIVER
+  HEALTH_WORKER
+  ADMIN
+}
+
+enum ReminderKind {
+  MEDICINE
+  WATER
+  MEAL
+  WALK
+  APPOINTMENT
+}
+
+enum OccurrenceStatus {
+  PENDING
+  DONE
+  SNOOZED
+  MISSED
+}
+
+enum AlertType {
+  DECLINE
+  MISSED_DOSE
+  SOS
+  INACTIVITY
+  INFO
+}
+
+enum Severity {
+  INFO
+  WARN
+  CRITICAL
+}
+
+enum MediaKind {
+  PHOTO
+  VOICE
+}
+
+// ---------- People & auth ----------
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String?
+  role            Role      @default(CAREGIVER)
+  activePatientId String?
+  createdAt       DateTime  @default(now())
+  lastLoginAt     DateTime?
+
+  memberships   CareTeamMember[]
+  refreshTokens RefreshToken[]
+  pushSubs      PushSubscription[]
+  acks          Alert[]            @relation("AlertAckBy")
+  auditLogs     AuditLog[]
+  consents      Consent[]
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  email     String
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  consumed  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------- Patient & care team ----------
+
+model Patient {
+  id           String   @id @default(cuid())
+  displayName  String
+  fullName     String?
+  age          Int?
+  place        String?
+  language     String   @default("English")
+  timezone     String   @default("Asia/Kolkata")
+  photoMediaId String?
+  voiceMediaId String?
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  team         CareTeamMember[]
+  devices      Device[]
+  reminders    Reminder[]
+  occurrences  ReminderOccurrence[]
+  events       ReminderEvent[]
+  alerts       Alert[]
+  family       FamilyMember[]
+  media        MediaItem[]
+  sessions     GameSession[]
+  baselines    Baseline[]
+  consents     Consent[]
+  pairingCodes PairingCode[]
+  auditLogs    AuditLog[]
+}
+
+model CareTeamMember {
+  id          String   @id @default(cuid())
+  patientId   String
+  userId      String
+  // Display "role" in the UI, e.g. "Daughter · Guwahati"
+  relation    String?
+  memberRole  Role     @default(CAREGIVER)
+  permissions String[]
+  isOwner     Boolean  @default(false)
+  hue         String   @default("violet")
+  notifyEmail Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, userId])
+}
+
+model Consent {
+  id          String    @id @default(cuid())
+  patientId   String
+  grantedById String
+  scope       String    @default("care_data")
+  guardian    Boolean   @default(true)
+  text        String?
+  grantedAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  grantedBy User    @relation(fields: [grantedById], references: [id], onDelete: Cascade)
+}
+
+// ---------- Patient device (the tablet/phone the elder uses) ----------
+
+model Device {
+  id         String    @id @default(cuid())
+  patientId  String
+  label      String?
+  lastSeenAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  patient  Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  pushSubs PushSubscription[]
+}
+
+model PairingCode {
+  id         String    @id @default(cuid())
+  code       String    @unique
+  secretHash String
+  expiresAt  DateTime
+  patientId  String?
+  deviceId   String?
+  claimedAt  DateTime?
+  // Set when the device has collected its token once
+  deliveredAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userId    String?
+  deviceId  String?
+  createdAt DateTime @default(now())
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+}
+
+// ---------- Reminders ----------
+
+model Reminder {
+  id           String       @id @default(cuid())
+  patientId    String
+  kind         ReminderKind
+  time         String // "HH:MM" in the patient's timezone
+  title        String
+  detail       String       @default("")
+  // Whose voice plays it, e.g. "Rina"
+  voiceBy      String       @default("")
+  voiceMediaId String?
+  photoMediaId String?
+  // 0 = Sunday … 6 = Saturday; empty = every day
+  daysOfWeek   Int[]
+  active       Boolean      @default(true)
+  clientId     String?      @unique
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  patient     Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  occurrences ReminderOccurrence[]
+  events      ReminderEvent[]
+
+  @@index([patientId])
+}
+
+model ReminderOccurrence {
+  id                  String           @id @default(cuid())
+  reminderId          String
+  patientId           String
+  // Local calendar date "YYYY-MM-DD" in the patient's timezone
+  date                String
+  dueAt               DateTime
+  status              OccurrenceStatus @default(PENDING)
+  snoozedUntil        DateTime?
+  notifiedAt          DateTime?
+  caregiverNotifiedAt DateTime?
+  emailedAt           DateTime?
+  completedAt         DateTime?
+  updatedAt           DateTime         @updatedAt
+
+  reminder Reminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  patient  Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([reminderId, date])
+  @@index([status, dueAt])
+  @@index([patientId, date])
+}
+
+model ReminderEvent {
+  id         String           @id @default(cuid())
+  reminderId String
+  patientId  String
+  date       String
+  status     OccurrenceStatus
+  clientId   String?          @unique
+  at         DateTime         @default(now())
+
+  reminder Reminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  patient  Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, at])
+}
+
+// ---------- Alerts ----------
+
+model Alert {
+  id             String    @id @default(cuid())
+  patientId      String
+  type           AlertType
+  severity       Severity
+  title          String
+  detail         String    @default("")
+  clientId       String?   @unique
+  acknowledged   Boolean   @default(false)
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  createdAt      DateTime  @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  ackBy   User?   @relation("AlertAckBy", fields: [acknowledgedBy], references: [id], onDelete: SetNull)
+
+  @@index([patientId, createdAt])
+}
+
+// ---------- Family & media ----------
+
+model FamilyMember {
+  id           String   @id @default(cuid())
+  patientId    String
+  name         String
+  relation     String
+  place        String   @default("")
+  hue          String   @default("violet")
+  memory       String   @default("")
+  photoMediaId String?
+  voiceMediaId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+}
+
+model MediaItem {
+  id           String    @id @default(cuid())
+  patientId    String
+  kind         MediaKind
+  // Cloudinary public_id and resource_type ("image" | "video" — audio is stored as video)
+  publicId     String    @unique
+  resourceType String
+  format       String?
+  bytes        Int?
+  label        String?
+  personName   String?
+  uploadedBy   String?
+  createdAt    DateTime  @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+}
+
+// ---------- Games & baselines ----------
+
+model GameSession {
+  id             String   @id @default(cuid())
+  patientId      String
+  gameId         String
+  level          Int
+  accuracy       Float
+  responseTimeMs Int
+  hintsUsed      Int      @default(0)
+  rounds         Int      @default(0)
+  durationMs     Int      @default(0)
+  playedAt       DateTime @default(now())
+  clientId       String?  @unique
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, playedAt])
+}
+
+model Baseline {
+  id         String   @id @default(cuid())
+  patientId  String
+  // "accuracy" | "responseTimeMs" | "activityMinutes"
+  metric     String
+  median     Float
+  ewma       Float
+  std        Float
+  sampleSize Int
+  computedAt DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, metric])
+}
+
+// ---------- Audit ----------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  patientId String?
+  action    String
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  actor   User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, createdAt])
+}

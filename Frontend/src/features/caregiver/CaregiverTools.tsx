@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { FamilyPhoto, HUE, Icon, Page, PageHeader, Section, TreeMark } from '../../components/ui';
-import { activityBaseline, demoPatient, fmtTime, games, weekActivity, type Hue, type ScheduleItem, type ScheduleKind } from '../../lib/demoData';
-import { useDemoStore, type SessionResult } from '../../store/demoStore';
+import { fmtTime, games, type Hue, type ScheduleItem, type ScheduleKind } from '../../lib/models';
+import { addFamily, removeFamily, removeReminder, upsertReminder, useAlerts, useFamily, useSchedule, useSessions, type SessionResult } from '../../lib/data';
+import { useUiStore } from '../../store/uiStore';
 import { KIND, KindBadge, StatusChip } from '../patient/schedule-ui';
 import { SettingsPanel } from '../settings/SettingsPanel';
 import { ActivityChart, AlertList } from './caregiver-ui';
+
+import { patientLine, usePatientInfo, useProgress } from '../../lib/live';
 
 const label = 'flex flex-col gap-1.5 text-sm font-semibold';
 const field = 'input !rounded-lg';
@@ -18,7 +21,7 @@ type Draft = { id?: string; time: string; kind: ScheduleKind; title: string; det
 const emptyDraft = (voice: string): Draft => ({ time: '09:00', kind: 'medicine', title: '', detail: '', voice });
 
 const ReminderForm = ({ draft, onCancel, onSave }: { draft: Draft; onCancel: () => void; onSave: (d: Draft) => void }) => {
-  const family = useDemoStore((s) => s.family);
+  const { family } = useFamily();
   const [d, setD] = useState(draft);
   useEffect(() => setD(draft), [draft]);
   const submit = (e: FormEvent) => {
@@ -75,11 +78,11 @@ const ReminderForm = ({ draft, onCancel, onSave }: { draft: Draft; onCancel: () 
 };
 
 export const CaregiverSchedule = () => {
-  const schedule = useDemoStore((s) => s.schedule);
-  const family = useDemoStore((s) => s.family);
-  const upsert = useDemoStore((s) => s.upsertReminder);
-  const remove = useDemoStore((s) => s.removeReminder);
-  const ring = useDemoStore((s) => s.ring);
+  const { schedule } = useSchedule();
+  const { family } = useFamily();
+  const upsert = upsertReminder;
+  const remove = removeReminder;
+  const ring = useUiStore((s) => s.ring);
   const [params, setParams] = useSearchParams();
   const [draft, setDraft] = useState<Draft | null>(params.get('new') ? emptyDraft(family[0]?.name ?? '') : null);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -188,9 +191,9 @@ export const CaregiverSchedule = () => {
 const HUES: Hue[] = ['violet', 'teal', 'rose', 'amber', 'sky', 'lime'];
 
 export const CaregiverFamily = () => {
-  const family = useDemoStore((s) => s.family);
-  const add = useDemoStore((s) => s.addFamily);
-  const remove = useDemoStore((s) => s.removeFamily);
+  const { family } = useFamily();
+  const add = addFamily;
+  const remove = removeFamily;
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', relation: '', place: '', memory: '' });
   const [photo, setPhoto] = useState<string | undefined>();
@@ -333,7 +336,7 @@ const SEED: SessionResult[] = [
 ];
 
 export const GameHistory = ({ limit }: { limit?: number }) => {
-  const sessions = useDemoStore((s) => s.sessions);
+  const { sessions } = useSessions();
   const list = [...sessions, ...SEED].slice(0, limit);
   return (
     <ul className="flex flex-col">
@@ -365,11 +368,13 @@ export const GameHistory = ({ limit }: { limit?: number }) => {
 /* ------------------------------------------------------------------ */
 
 export const CaregiverReport = () => {
-  const schedule = useDemoStore((s) => s.schedule);
-  const sessions = useDemoStore((s) => s.sessions);
-  const alerts = useDemoStore((s) => s.alerts);
+  const { schedule } = useSchedule();
+  const { sessions } = useSessions();
+  const { alerts } = useAlerts();
+  const demoPatient = usePatientInfo();
+  const { weekActivity, activityBaseline } = useProgress();
   const total = weekActivity.reduce((a, b) => a + b.minutes, 0);
-  const avg = Math.round(total / weekActivity.length);
+  const avg = Math.round(total / Math.max(1, weekActivity.length));
   const below = weekActivity.filter((d) => d.minutes < activityBaseline * 0.7).map((d) => d.day);
   const week = (() => {
     const end = new Date();
@@ -396,7 +401,7 @@ export const CaregiverReport = () => {
             <p className="eyebrow">Weekly report · {week}</p>
             <h1 className="mt-1 text-3xl font-extrabold tracking-tight">{demoPatient.fullName}</h1>
             <p className="text-ohara-muted">
-              {demoPatient.age} years · {demoPatient.place} · speaks {demoPatient.language}
+              {patientLine(demoPatient)}
             </p>
           </div>
           <span className="flex items-center gap-2 text-ohara-ind">

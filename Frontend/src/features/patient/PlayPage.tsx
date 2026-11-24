@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { HUE, Icon, Page, PageHeader } from '../../components/ui';
-import { games } from '../../lib/demoData';
-import { useDemoStore } from '../../store/demoStore';
+import { games } from '../../lib/models';
+import { useSessions } from '../../lib/data';
 
 const GAME_ICON: Record<string, (p: { className?: string }) => JSX.Element> = {
   'memory-match': Icon.Grid,
@@ -12,7 +12,7 @@ const GAME_ICON: Record<string, (p: { className?: string }) => JSX.Element> = {
 
 /** Play: the four games as big cards. "Played today" shows as a leaf — never a score. */
 export const PlayPage = () => {
-  const sessions = useDemoStore((s) => s.sessions);
+  const { sessions } = useSessions();
   const played = new Set(sessions.map((x) => x.gameId));
 
   return (

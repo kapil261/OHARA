@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Icon, Page, PageHeader, Section } from '../../components/ui';
-import { activityBaseline, demoPatient, fmtTime, weekActivity } from '../../lib/demoData';
-import { useDemoStore } from '../../store/demoStore';
+import { fmtTime } from '../../lib/models';
+import { patientLine, usePatientInfo, useProgress } from '../../lib/live';
+import { useSchedule } from '../../lib/data';
 import { KindBadge, StatusChip } from '../patient/schedule-ui';
 import { ActivityChart, AlertList, StatTile, TeamList } from './caregiver-ui';
 import { GameHistory } from './CaregiverTools';
@@ -23,20 +24,22 @@ const useFlash = () => {
 };
 
 export const CaregiverOverview = () => {
-  const schedule = useDemoStore((s) => s.schedule);
+  const schedule = useSchedule().schedule;
   const { node } = useFlash();
   const navigate = useNavigate();
   const meds = schedule.filter((s) => s.kind === 'medicine');
   const medsDone = meds.filter((s) => s.status === 'done').length;
   const done = schedule.filter((s) => s.status === 'done').length;
-  const today = weekActivity[weekActivity.length - 1].minutes;
+  const demoPatient = usePatientInfo();
+  const { weekActivity, activityBaseline } = useProgress();
+  const today = weekActivity[weekActivity.length - 1]?.minutes ?? 0;
 
   return (
     <Page wide>
       <PageHeader
         eyebrow="Caring for"
         title={demoPatient.fullName}
-        lead={`${demoPatient.age} years · ${demoPatient.place} · speaks ${demoPatient.language}`}
+        lead={patientLine(demoPatient)}
         actions={
           <>
             <button type="button" className="btn-secondary" onClick={() => navigate('/caregiver/report')}>

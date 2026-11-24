@@ -14,6 +14,9 @@ export type Permission =
 export interface Patient {
   id: string;
   displayName: string;
+  fullName?: string;
+  age?: number | null;
+  place?: string | null;
   language: string;
   timezone?: string;
   baseline?: Baseline;
@@ -68,6 +71,8 @@ export interface CareTeamMember {
 
 /** The /api/me payload. Mirrors Hawkr's MeResponse shape: one shape drives all routing. */
 export interface MeResponse {
+  id?: string;
+  email?: string;
   role: Role;
   patientId: string | null;
   patient: Patient | null;
@@ -77,4 +82,5 @@ export interface MeResponse {
   actingPatientId: string | null;
   /** The display name used by the patient mode greeting. */
   displayName?: string;
+  patients?: { id: string; displayName: string; isOwner: boolean }[];
 }
