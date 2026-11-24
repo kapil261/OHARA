@@ -22,9 +22,15 @@ class RoundHistoryItem(BaseModel):
 
 class DifficultyRequest(BaseModel):
     patientId: str
-    game: str
+    game: Optional[str] = None
+    gameId: Optional[str] = None
     currentLevel: Optional[int] = None
     currentSkill: Optional[float] = None
+    # Flat session fields sent directly by backend mlClient
+    level: Optional[int] = None
+    accuracy: Optional[float] = None
+    responseTimeMs: Optional[float] = None
+    hintsUsed: Optional[int] = None
     history: List[RoundHistoryItem] = Field(default_factory=list)
 
 
@@ -34,6 +40,7 @@ class DifficultyResponse(BaseModel):
     level: int
     skill: float
     targetSuccess: float = 0.78
+    targetSuccessRate: Optional[float] = 0.78
     reason: Optional[str] = None
 
 
@@ -81,8 +88,17 @@ class BaselineMetricData(BaseModel):
     count: Optional[int] = None
 
 
+class SessionHistoryItem(BaseModel):
+    accuracy: float
+    responseTimeMs: float
+    playedAt: Optional[str] = None
+
+
 class DeclineRequest(BaseModel):
     patientId: str
+    # Format sent by backend mlClient.ts:
+    sessions: Optional[List[SessionHistoryItem]] = None
+    # Format specified in project README:
     recent: List[RecentMetric] = Field(default_factory=list)
     baseline: Dict[str, BaselineMetricData] = Field(default_factory=dict)
 
@@ -90,9 +106,12 @@ class DeclineRequest(BaseModel):
 class DeclineResponse(BaseModel):
     patientId: str
     declined: bool
+    decline: bool = False  # Direct compatibility with backend mlClient.ts
     zScore: float
+    score: Optional[float] = None  # Direct compatibility with backend mlClient.ts
     metric: str
     severity: str  # "none" | "mild" | "moderate" | "sharp"
     flagged: bool
     persistenceCount: int
     notes: str
+    reason: Optional[str] = None  # Direct compatibility with backend mlClient.ts
