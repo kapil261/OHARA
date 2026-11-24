@@ -1,0 +1,108 @@
+/* OHARA design tokens — Hawkr's layout, OHARA's own "Forest & honey" palette.
+ * The only file that holds raw colours, radii and sizes. Colours are RGB channels so Tailwind
+ * can apply alpha (bg-ohara-ind/90). Light only for now.
+ *
+ * The look: a deep-green frame like an old tree's shade, a warm cream panel, soft cards,
+ * forest green as the one action colour, honey as a sparing highlight, coral reserved for SOS.
+ *
+ * Two sizes: the default suits caregivers and health workers; [data-size='elder'] (patient
+ * mode, login, onboarding) raises text to 20px+ and touch targets to 64px.
+ */
+:root {
+  /* ---- colour channels: "Forest & honey" ----
+   * Named by role, not hue: ind = the action colour (forest green), lime = the highlight (honey).
+   * The names stay so components never change when the palette does. */
+  --bg: 251 247 238; /* warm cream */
+  --surface: 255 254 250;
+  --sunken: 244 239 228;
+  --line: 233 226 211;
+  --line-strong: 214 205 186;
+  --ink: 26 36 30; /* green-black, softer than pure black */
+  --muted: 90 98 89;
+  --night: 20 40 31; /* deep green: the frame and sidebar */
+  --night-2: 34 60 48;
+
+  --ind: 47 107 79; /* forest green #2F6B4F */
+  --ind-hover: 36 88 64;
+  --ind-soft: 228 239 230; /* sage */
+  --ind-ink: 33 84 60;
+
+  --lime: 242 181 68; /* honey #F2B544 — highlight only */
+  --lime-soft: 253 241 214;
+  --lime-ink: 116 78 12;
+
+  --sky: 214 234 240;
+  --sky-ink: 28 92 112;
+
+  --tea: 63 143 95; /* leaf: done, on track */
+  --tea-soft: 226 242 230;
+  --tea-ink: 31 100 62;
+
+  --amb: 200 116 58; /* clay */
+  --amb-soft: 250 233 218;
+  --amb-ink: 138 70 24;
+
+  --rose: 176 67 108; /* berry */
+  --rose-soft: 248 228 236;
+  --rose-ink: 130 40 76;
+
+  --cri: 217 83 74; /* warm coral red: SOS and urgent only */
+  --cri-soft: 252 234 231;
+  --cri-ink: 166 48 40;
+  --cri-line: 240 196 190;
+
+  color-scheme: light;
+
+  /* ---- type ---- */
+  --ui-font: 'Nunito', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 34px;
+  --text-4xl: 44px;
+
+  /* ---- shape: 12 inside a card, 20 a card, 28 a panel, pill for every control ---- */
+  --ui-r-sm: 12px;
+  --ui-r-md: 12px;
+  --ui-r-lg: 20px;
+  --ui-r-xl: 20px;
+  --ui-r-2xl: 28px;
+  --ui-r-pill: 999px;
+
+  --ui-control: 44px;
+  --ui-btn-px: 20px;
+
+  /* ---- motion: calm, no flashing ---- */
+  --ui-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --ui-enter: 240ms;
+}
+
+/* Elders: text 20px+, touch targets 64px (README asks 56px+) */
+[data-size='elder'] {
+  --text-xs: 15px;
+  --text-sm: 17px;
+  --text-base: 20px;
+  --text-lg: 24px;
+  --text-xl: 28px;
+  --text-2xl: 34px;
+  --text-3xl: 42px;
+  --text-4xl: 56px;
+  --ui-control: 64px;
+  --ui-btn-px: 28px;
+}
+
+/* Patient setting: "Extra large" text */
+[data-size='elder'][data-text='xl'] {
+  --text-xs: 17px;
+  --text-sm: 19px;
+  --text-base: 23px;
+  --text-lg: 27px;
+  --text-xl: 32px;
+  --text-2xl: 38px;
+  --text-3xl: 46px;
+  --text-4xl: 60px;
+  --ui-control: 72px;
+}

@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-ohara-night font-sans text-base text-ohara-ink antialiased;
+}
+
+/* Elder-sized areas: plain text inherits the bigger base size too */
+[data-size='elder'] {
+  font-size: var(--text-base);
+  line-height: 1.45;
+}
+
+/* Quiet scrollbars inside the frame */
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--line-strong)) transparent;
+}
+
+:focus-visible {
+  @apply outline-none ring-4 ring-ohara-ind/40 ring-offset-2 ring-offset-ohara-bg;
+}
+
+/* Respect "reduce motion": elders should never see flashing or busy movement */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex min-h-control items-center justify-center gap-2.5 rounded-pill px-[var(--ui-btn-px)] text-base font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-ohara-ind text-white hover:bg-ohara-ind-hover;
+  }
+  .btn-secondary {
+    @apply btn border border-ohara-line-strong bg-ohara-surface text-ohara-ink hover:bg-ohara-sunken;
+  }
+  .btn-ghost {
+    @apply btn text-ohara-muted hover:bg-ohara-sunken hover:text-ohara-ink;
+  }
+  .btn-danger {
+    @apply btn bg-ohara-cri text-white hover:bg-ohara-cri-ink;
+  }
+  .input {
+    @apply min-h-control w-full rounded-pill border border-ohara-line-strong bg-ohara-surface px-[var(--ui-btn-px)] text-base text-ohara-ink placeholder:text-ohara-muted/70 focus:border-ohara-ind focus:outline-none focus:ring-4 focus:ring-ohara-ind/20;
+  }
+  .card {
+    @apply rounded-xl border border-ohara-line bg-ohara-surface shadow-card;
+  }
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wider text-ohara-muted;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-pill px-3 py-1 text-xs font-semibold;
+  }
+}
