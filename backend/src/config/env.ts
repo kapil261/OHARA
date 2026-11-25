@@ -43,6 +43,7 @@ const schema = z.object({
   // Blank = ML service not deployed; the backend uses its local heuristics.
   ML_URL: z.string().optional(),
   ML_TIMEOUT_MS: z.coerce.number().default(3000),
+  ML_API_KEY: z.string().default('ohara-ml-secret-key'),
 
   BHASHINI_USER_ID: z.string().optional(),
   BHASHINI_API_KEY: z.string().optional(),

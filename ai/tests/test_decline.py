@@ -85,3 +85,36 @@ def test_cold_start_suppression():
     # Decline must be suppressed during cold start baseline calibration
     assert res.declined is False
     assert res.severity == "none"
+
+
+def test_empty_input_handling():
+    """Empty recent metrics or baseline map handled gracefully."""
+    res1 = evaluate_decline("p1", [], {})
+    assert res1.declined is False
+    assert res1.persistenceCount == 0
+
+    baseline = {"accuracy": BaselineMetricData(median=0.80, ewma=0.80, std=0.05, count=14)}
+    res2 = evaluate_decline("p1", [RecentMetric(metric="accuracy", values=[])], baseline)
+    assert res2.declined is False
+    assert res2.persistenceCount == 0
+
+
+def test_single_session_input():
+    """A single session should never trigger persistent decline."""
+    baseline = {"accuracy": BaselineMetricData(median=0.80, ewma=0.80, std=0.05, count=14)}
+    res = evaluate_decline("p1", [RecentMetric(metric="accuracy", values=[0.30])], baseline)
+    assert res.declined is False
+    assert res.persistenceCount == 0
+
+
+def test_extreme_response_time():
+    """Very large response times (e.g. 600,000 ms) calculate correctly without overflow."""
+    baseline = {"responseTimeMs": BaselineMetricData(median=1800.0, ewma=1800.0, std=200.0, count=14)}
+    res = evaluate_decline(
+        "p1",
+        [RecentMetric(metric="responseTimeMs", values=[600000.0, 600000.0, 600000.0])],
+        baseline,
+    )
+    assert res.declined is True
+    assert res.severity == "sharp"
+    assert res.zScore == 2991.0

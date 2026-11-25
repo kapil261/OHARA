@@ -1,17 +1,26 @@
 """FastAPI application for the OHARA AI/ML Microservice."""
 
+import os
 import logging
-import numpy as np
-from fastapi import FastAPI, HTTPException, status
+from contextlib import asynccontextmanager
+from typing import Optional
+from fastapi import FastAPI, HTTPException, status, Security, Depends
+from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import (
     DEFAULT_SKILL,
     TARGET_SUCCESS_RATE,
     MIN_LEVEL,
+    ML_API_KEY,
+    BACKEND_ORIGIN,
+    SERVICE_VERSION,
+    DEFAULT_EWMA_ALPHA,
+    MIN_BASELINE_DAYS,
 )
 from app.schemas import (
     HealthResponse,
+    VersionResponse,
     DifficultyRequest,
     DifficultyResponse,
     BaselineRequest,
@@ -19,6 +28,7 @@ from app.schemas import (
     DeclineRequest,
     DeclineResponse,
     RoundHistoryItem,
+    RecentMetric,
 )
 from app.difficulty.elo import calculate_next_difficulty, difficulty_for_level
 from app.baseline.baseline import compute_baseline_stats
@@ -27,29 +37,88 @@ from app.decline.detector import evaluate_decline
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("ohara-ai")
 
+# Lock down CORS strictly to backend origin (eliminates wildcard allow_origins with credentials)
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", f"{BACKEND_ORIGIN},http://localhost:4000,http://127.0.0.1:4000").split(",")
+    if origin.strip()
+]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Logs active models, hyperparameters, and security configuration at startup."""
+    logger.info("=" * 60)
+    logger.info("OHARA AI / ML Microservice Started (v%s)", SERVICE_VERSION)
+    logger.info(
+        "Hyperparameters: TARGET_SUCCESS_RATE=%.2f | EWMA_ALPHA=%.2f | MIN_BASELINE_DAYS=%d",
+        TARGET_SUCCESS_RATE,
+        DEFAULT_EWMA_ALPHA,
+        MIN_BASELINE_DAYS,
+    )
+    logger.info("CORS Policy: Restricted to %s", allowed_origins)
+    logger.info("Authentication: X-ML-Key header enforced on computational endpoints")
+    logger.info(
+        "Active Engines: Elo Adaptive Difficulty (dignity credit 0.7) | "
+        "14-Day Median+EWMA Baseline | Personal Z-score Decline Detector"
+    )
+    logger.info("=" * 60)
+    yield
+
+
 app = FastAPI(
     title="OHARA AI / ML Service",
     description="Adaptive game difficulty and personal baseline decline detection for dementia care.",
-    version="1.0.0",
+    version=SERVICE_VERSION,
+    lifespan=lifespan,
 )
 
-# Enable CORS for local cross-service communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# API Key Header Authentication
+api_key_header = APIKeyHeader(name="X-ML-Key", auto_error=False)
+
+
+def verify_ml_key(api_key: Optional[str] = Security(api_key_header)) -> str:
+    """Verifies that requests to ML endpoints supply the correct X-ML-Key."""
+    expected = os.getenv("ML_API_KEY", ML_API_KEY)
+    if not api_key or api_key != expected:
+        logger.warning("Rejected unauthorized ML request with invalid or missing X-ML-Key header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Missing or invalid X-ML-Key header",
+        )
+    return api_key
 
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 def health_check() -> HealthResponse:
-    """Service health probe."""
-    return HealthResponse(status="ok", service="ohara-ai", version="1.0.0")
+    """Service health probe (public for orchestrator health checks)."""
+    return HealthResponse(status="ok", service="ohara-ai", version=SERVICE_VERSION)
 
 
-@app.post("/difficulty", response_model=DifficultyResponse, tags=["Cognitive Games"])
+@app.get("/version", response_model=VersionResponse, tags=["System"])
+def version_info() -> VersionResponse:
+    """Service version and active model metadata (public)."""
+    return VersionResponse(
+        service="ohara-ai",
+        version=SERVICE_VERSION,
+        targetSuccessRate=TARGET_SUCCESS_RATE,
+        models={
+            "difficulty": "Elo Rating (errorless learning dignity credit 0.7, step clamp +/-1)",
+            "baseline": f"{MIN_BASELINE_DAYS}-day Median Bootstrap + EWMA (alpha={DEFAULT_EWMA_ALPHA})",
+            "decline": "Z-score Multi-day Persistence Filter (>=3 days, elder self-baseline)",
+        },
+    )
+
+
+@app.post("/difficulty", response_model=DifficultyResponse, dependencies=[Depends(verify_ml_key)], tags=["Cognitive Games"])
 def adaptive_difficulty(req: DifficultyRequest) -> DifficultyResponse:
     """
     Computes adaptive Elo difficulty for the patient's next game round:
@@ -85,6 +154,7 @@ def adaptive_difficulty(req: DifficultyRequest) -> DifficultyResponse:
         return DifficultyResponse(
             patientId=req.patientId,
             game=game_name,
+            gameId=req.gameId or game_name,
             level=rec_level,
             skill=new_skill,
             targetSuccess=TARGET_SUCCESS_RATE,
@@ -96,7 +166,7 @@ def adaptive_difficulty(req: DifficultyRequest) -> DifficultyResponse:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@app.post("/baseline", response_model=BaselineResponse, tags=["Analytics"])
+@app.post("/baseline", response_model=BaselineResponse, dependencies=[Depends(verify_ml_key)], tags=["Analytics"])
 def personal_baseline(req: BaselineRequest) -> BaselineResponse:
     """
     Computes or updates personal baseline:
@@ -134,72 +204,47 @@ def personal_baseline(req: BaselineRequest) -> BaselineResponse:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@app.post("/decline", response_model=DeclineResponse, tags=["Early Detection"])
+@app.post("/decline", response_model=DeclineResponse, dependencies=[Depends(verify_ml_key)], tags=["Early Detection"])
 def decline_detection(req: DeclineRequest) -> DeclineResponse:
     """
-    Evaluates recent performance against baseline using z-scores and persistence:
-    - Supports both rich recent/baseline structure and backend mlClient session history
-    - Compares elder strictly against their own baseline (never population norms)
+    Evaluates recent performance against the patient's personal baseline using z-scores:
+    - Compares elder strictly against their own normal (never population limits)
+    - Uses z-score and multi-day persistence checks from decline/detector.py
     - Requires multi-day persistence to eliminate false alarms from transient bad days
     - Flags mild, moderate, or sharp decline severity
     """
     try:
-        # 1. Format sent by backend mlClient.ts: { patientId, sessions: [...] }
+        recent_metrics = list(req.recent or [])
+
+        # Format sent by backend mlClient: { patientId, sessions: [...], baseline: {...} }
         if req.sessions is not None:
             if not req.sessions:
                 return DeclineResponse(
                     patientId=req.patientId,
-                    declined=False,
                     decline=False,
-                    zScore=0.0,
+                    declined=False,
                     score=0.0,
-                    metric="accuracy",
+                    zScore=0.0,
+                    metric="none",
                     severity="none",
                     flagged=False,
                     persistenceCount=0,
-                    notes="No sessions provided for decline evaluation",
                     reason="No sessions provided for decline evaluation",
+                    notes="No sessions provided for decline evaluation",
                 )
 
             accuracies = [s.accuracy for s in req.sessions]
             response_times = [s.responseTimeMs for s in req.sessions]
+            recent_metrics = [
+                RecentMetric(metric="accuracy", values=accuracies),
+                RecentMetric(metric="responseTimeMs", values=response_times),
+            ]
 
-            mean_acc = float(np.mean(accuracies))
-            mean_rt = float(np.mean(response_times))
-
-            # Threshold check: TARGET_SUCCESS_RATE (0.78), decline triggered if persistent accuracy < 0.62
-            # or severe latency increase
-            is_declining = (mean_acc < 0.62) or (mean_rt > 3200.0)
-            score_val = round((mean_acc - TARGET_SUCCESS_RATE) / 0.08, 2)
-            severity_val = "sharp" if mean_acc < 0.50 else ("moderate" if is_declining else "none")
-            reason_text = (
-                f"Recent game accuracy ({mean_acc * 100:.0f}%) is below personal comfort threshold"
-                if is_declining else "Recent session metrics remain stable"
-            )
-
-            return DeclineResponse(
-                patientId=req.patientId,
-                declined=is_declining,
-                decline=is_declining,
-                zScore=score_val,
-                score=score_val,
-                metric="accuracy" if mean_acc < 0.62 else "responseTimeMs",
-                severity=severity_val,
-                flagged=is_declining,
-                persistenceCount=len(req.sessions) if is_declining else 0,
-                notes=reason_text,
-                reason=reason_text,
-            )
-
-        # 2. Rich structure with recent window and baseline map
         res = evaluate_decline(
             patient_id=req.patientId,
-            recent_metrics=req.recent,
-            baseline_map=req.baseline,
+            recent_metrics=recent_metrics,
+            baseline_map=req.baseline or {},
         )
-        res.decline = res.declined
-        res.score = res.zScore
-        res.reason = res.notes
         return res
 
     except Exception as e:

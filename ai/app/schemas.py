@@ -4,11 +4,18 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-# --- Health Check ---
+# --- Health & Version Checks ---
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "ohara-ai"
     version: str = "1.0.0"
+
+
+class VersionResponse(BaseModel):
+    service: str = "ohara-ai"
+    version: str = "1.0.0"
+    targetSuccessRate: float = 0.78
+    models: Dict[str, str] = Field(default_factory=dict)
 
 
 # --- Difficulty / Elo Schemas ---
@@ -22,12 +29,11 @@ class RoundHistoryItem(BaseModel):
 
 class DifficultyRequest(BaseModel):
     patientId: str
-    game: Optional[str] = None
     gameId: Optional[str] = None
+    game: Optional[str] = None
+    level: Optional[int] = None
     currentLevel: Optional[int] = None
     currentSkill: Optional[float] = None
-    # Flat session fields sent directly by backend mlClient
-    level: Optional[int] = None
     accuracy: Optional[float] = None
     responseTimeMs: Optional[float] = None
     hintsUsed: Optional[int] = None
@@ -37,6 +43,7 @@ class DifficultyRequest(BaseModel):
 class DifficultyResponse(BaseModel):
     patientId: str
     game: str
+    gameId: Optional[str] = None
     level: int
     skill: float
     targetSuccess: float = 0.78
@@ -50,6 +57,7 @@ class BaselineStats(BaseModel):
     ewma: float
     std: float
     count: Optional[int] = None
+    sampleSize: Optional[int] = None
 
 
 class MetricSeries(BaseModel):
@@ -86,6 +94,10 @@ class BaselineMetricData(BaseModel):
     std: float
     median: Optional[float] = None
     count: Optional[int] = None
+    sampleSize: Optional[int] = None
+
+    def get_sample_count(self) -> Optional[int]:
+        return self.count if self.count is not None else self.sampleSize
 
 
 class SessionHistoryItem(BaseModel):
@@ -98,20 +110,21 @@ class DeclineRequest(BaseModel):
     patientId: str
     # Format sent by backend mlClient.ts:
     sessions: Optional[List[SessionHistoryItem]] = None
-    # Format specified in project README:
-    recent: List[RecentMetric] = Field(default_factory=list)
-    baseline: Dict[str, BaselineMetricData] = Field(default_factory=dict)
+    # Flexible metric format specified in README:
+    recent: Optional[List[RecentMetric]] = Field(default_factory=list)
+    # Personal baseline map sent by backend or caller:
+    baseline: Optional[Dict[str, BaselineMetricData]] = Field(default_factory=dict)
 
 
 class DeclineResponse(BaseModel):
     patientId: str
-    declined: bool
     decline: bool = False  # Direct compatibility with backend mlClient.ts
-    zScore: float
-    score: Optional[float] = None  # Direct compatibility with backend mlClient.ts
-    metric: str
-    severity: str  # "none" | "mild" | "moderate" | "sharp"
-    flagged: bool
-    persistenceCount: int
-    notes: str
-    reason: Optional[str] = None  # Direct compatibility with backend mlClient.ts
+    declined: bool = False
+    score: float = 0.0  # Direct compatibility with backend mlClient.ts (z-score)
+    zScore: float = 0.0
+    metric: str = "none"
+    severity: str = "none"  # "none" | "mild" | "moderate" | "sharp"
+    flagged: bool = False
+    persistenceCount: int = 0
+    reason: str = ""  # Direct compatibility with backend mlClient.ts
+    notes: str = ""

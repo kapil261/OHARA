@@ -1,6 +1,12 @@
 """OHARA AI/ML Service Configuration and Hyperparameters."""
 
+import os
 from typing import Set
+
+# --- Service & Security Configuration ---
+ML_API_KEY: str = os.getenv("ML_API_KEY", "ohara-ml-secret-key")
+BACKEND_ORIGIN: str = os.getenv("BACKEND_ORIGIN", "http://localhost:4000")
+SERVICE_VERSION: str = "1.0.0"
 
 # --- Elo Adaptive Difficulty Constants ---
 DEFAULT_SKILL: float = 1200.0

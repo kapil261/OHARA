@@ -65,8 +65,8 @@ export function detectDeclineLocally(
   return { decline: false, score, reason: 'Within usual range' };
 }
 
-/** Local fallback for adaptive difficulty: aim for ~80% success. Levels 1..5. */
-export function nextLevelLocally(current: number, accuracy: number, hintsUsed: number, targetSuccess = 0.8): number {
+/** Local fallback for adaptive difficulty: aim for ~78% success (aligned with AI microservice). Levels 1..5. */
+export function nextLevelLocally(current: number, accuracy: number, hintsUsed: number, targetSuccess = 0.78): number {
   let level = current;
   if (accuracy >= targetSuccess + 0.1 && hintsUsed === 0) level += 1;
   else if (accuracy < targetSuccess - 0.2 || hintsUsed >= 3) level -= 1;

@@ -9,7 +9,10 @@ async function call<T>(path: string, body: unknown): Promise<T | null> {
   try {
     const res = await fetch(`${env.ML_URL!.replace(/\/$/, '')}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-ML-Key': env.ML_API_KEY || 'ohara-ml-secret-key',
+      },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(env.ML_TIMEOUT_MS),
     });
@@ -31,8 +34,17 @@ export interface DifficultyIn {
 }
 export const mlDifficulty = (input: DifficultyIn) => call<{ level: number }>('/difficulty', input);
 
+export interface BaselineMetricIn {
+  median?: number;
+  ewma: number;
+  std: number;
+  count?: number;
+  sampleSize?: number;
+}
+
 export interface DeclineIn {
   patientId: string;
-  sessions: { accuracy: number; responseTimeMs: number; playedAt: string }[];
+  sessions: { accuracy: number; responseTimeMs: number; playedAt?: string }[];
+  baseline?: Record<string, BaselineMetricIn>;
 }
 export const mlDecline = (input: DeclineIn) => call<{ decline: boolean; score?: number; reason?: string }>('/decline', input);

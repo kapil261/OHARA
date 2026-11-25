@@ -36,31 +36,47 @@ def evaluate_decline(
     if not recent_metrics or not baseline_map:
         return DeclineResponse(
             patientId=patient_id,
+            decline=False,
             declined=False,
+            score=0.0,
             zScore=0.0,
             metric="none",
             severity="none",
             flagged=False,
             persistenceCount=0,
             notes="Insufficient recent or baseline data for decline analysis.",
+            reason="Insufficient recent or baseline data for decline analysis.",
         )
+
+    # Normalize baseline map keys for case-insensitive lookup
+    normalized_baseline: Dict[str, BaselineMetricData] = {
+        k.lower().replace("_", "").replace("-", ""): v for k, v in baseline_map.items()
+    }
 
     most_severe_result: Optional[DeclineResponse] = None
     highest_severity_rank = -1
     severity_order = {"none": 0, "mild": 1, "moderate": 2, "sharp": 3}
+    evaluated_any = False
 
     for item in recent_metrics:
         metric = item.metric
         values = item.values
-        if not values or metric not in baseline_map:
+        if not values:
             continue
 
-        base_data = baseline_map[metric]
-
-        # Cold start check: do not flag decline if baseline has fewer than 14 days
-        if base_data.count is not None and base_data.count < MIN_BASELINE_DAYS:
+        norm_key = metric.lower().replace("_", "").replace("-", "")
+        if norm_key not in normalized_baseline:
             continue
 
+        base_data = normalized_baseline[norm_key]
+        sample_count = base_data.get_sample_count()
+
+        # Cold start check: do not flag decline if baseline has fewer than MIN_BASELINE_DAYS
+        if sample_count is not None and sample_count < MIN_BASELINE_DAYS:
+            evaluated_any = True
+            continue
+
+        evaluated_any = True
         std = max(base_data.std, EPSILON_STD)
         ewma = base_data.ewma
         mean_recent = float(np.mean(values))
@@ -82,6 +98,7 @@ def evaluate_decline(
                 persisting_count += 1
 
         # Persistence rule: Requires at least PERSISTENCE_THRESHOLD_DAYS (or all recent if >= 2)
+        # Single session cannot trigger persistent decline
         required_persistence = min(PERSISTENCE_THRESHOLD_DAYS, len(values))
         is_persistent = (persisting_count >= required_persistence) and (len(values) >= 2)
 
@@ -102,37 +119,59 @@ def evaluate_decline(
             elif directional_z >= Z_THRESHOLD_MILD:
                 severity = "mild"
                 declined = True
-                flagged = False  # Logged for trend monitoring, not an immediate alarm
+                flagged = False  # Logged for trend monitoring, not an immediate alert
 
-        notes = (
-            f"Metric '{metric}' recent mean is {mean_recent:.3f} vs baseline EWMA {ewma:.3f} "
-            f"(z={raw_z:.2f}). Persisted for {persisting_count}/{len(values)} recent observations."
-        )
+        effective_persistence = persisting_count if is_persistent else 0
+        score_val = round(raw_z, 2)
+        
+        if is_persistent:
+            reason_text = (
+                f"Metric '{metric}' recent mean is {mean_recent:.3f} vs baseline EWMA {ewma:.3f} "
+                f"(z={raw_z:.2f}). Persisted for {persisting_count}/{len(values)} recent observations."
+            )
+        else:
+            reason_text = (
+                f"Metric '{metric}' recent mean is {mean_recent:.3f} vs baseline EWMA {ewma:.3f} "
+                f"(z={raw_z:.2f}). Did not meet multi-day persistence requirement."
+            )
 
         rank = severity_order[severity]
         if rank > highest_severity_rank:
             highest_severity_rank = rank
             most_severe_result = DeclineResponse(
                 patientId=patient_id,
+                decline=declined,
                 declined=declined,
-                zScore=round(raw_z, 2),
+                score=score_val,
+                zScore=score_val,
                 metric=metric,
                 severity=severity,
                 flagged=flagged,
-                persistenceCount=persisting_count,
-                notes=notes,
+                persistenceCount=effective_persistence,
+                reason=reason_text,
+                notes=reason_text,
             )
 
     if most_severe_result is not None:
         return most_severe_result
 
+    fallback_metric = recent_metrics[0].metric if recent_metrics else "none"
+    default_msg = (
+        "Baseline calibration in progress (< 14 days); decline detection suppressed."
+        if evaluated_any and not any(len(m.values) for m in recent_metrics if m.values)
+        else "Metrics are within normal personal variation ranges."
+    )
+
     return DeclineResponse(
         patientId=patient_id,
+        decline=False,
         declined=False,
+        score=0.0,
         zScore=0.0,
-        metric=recent_metrics[0].metric if recent_metrics else "none",
+        metric=fallback_metric,
         severity="none",
         flagged=False,
         persistenceCount=0,
-        notes="Metrics are within normal personal variation ranges.",
+        reason=default_msg,
+        notes=default_msg,
     )
