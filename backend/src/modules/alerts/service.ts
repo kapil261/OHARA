@@ -1,7 +1,8 @@
-import type { AlertType, Severity } from '@prisma/client';
+import type { AlertType, Prisma, Severity } from '@prisma/client';
 import { env } from '../../config/env.js';
-import { sendMail, simpleHtml } from '../../integrations/mailer.js';
 import { pushTo } from '../../integrations/webpush.js';
+import { hasConsent } from '../../lib/consent.js';
+import { emailTeam, smsTeam } from '../../lib/notify.js';
 import { prisma } from '../../lib/prisma.js';
 import { notifiableTeam } from '../common.js';
 
@@ -13,13 +14,17 @@ interface NewAlert {
   detail?: string;
   clientId?: string;
   at?: Date;
+  location?: Prisma.InputJsonValue;
+  occurrenceId?: string;
+  deviceId?: string;
 }
 
 /**
- * Create an alert and notify the care team (push now; email for CRITICAL alerts).
+ * Create an alert and notify the care team: push always; email for CRITICAL alerts
+ * (or when `email` is set); SMS when `sms` is set (SOS). Every email / SMS is logged.
  * Idempotent by clientId so offline SOS retries never double-alert.
  */
-export async function raiseAlert(input: NewAlert, opts: { email?: boolean } = {}) {
+export async function raiseAlert(input: NewAlert, opts: { email?: boolean; sms?: boolean } = {}) {
   if (input.clientId) {
     const dup = await prisma.alert.findUnique({ where: { clientId: input.clientId } });
     if (dup) return { alert: dup, duplicate: true };
@@ -33,6 +38,9 @@ export async function raiseAlert(input: NewAlert, opts: { email?: boolean } = {}
       detail: input.detail ?? '',
       clientId: input.clientId,
       createdAt: input.at,
+      location: input.location,
+      occurrenceId: input.occurrenceId,
+      deviceId: input.deviceId,
     },
   });
 
@@ -40,20 +48,39 @@ export async function raiseAlert(input: NewAlert, opts: { email?: boolean } = {}
   const patient = await prisma.patient.findUnique({ where: { id: input.patientId }, select: { displayName: true } });
   const name = patient?.displayName ?? 'Your patient';
   const url = `${env.APP_URL.replace(/\/$/, '')}/caregiver`;
+  const ctx = { patientId: input.patientId, alertId: alert.id };
 
   await pushTo({ userIds: team.userIds }, { title: `${name}: ${alert.title}`, body: alert.detail || alert.title, tag: `alert-${alert.id}`, url, data: { alertId: alert.id } });
 
+  if (opts.sms && team.phones.length) await smsTeam(ctx, team.phones, name, alert.title);
   if ((opts.email ?? input.severity === 'CRITICAL') && team.emails.length) {
-    const subject = `[OHARA] ${name}: ${alert.title}`;
     const lines = [alert.detail || alert.title, `Time: ${alert.createdAt.toLocaleString('en-IN', { timeZone: env.DEFAULT_TIMEZONE })}`];
-    await sendMail({ to: team.emails, subject, text: lines.join('\n') + `\n\nOpen OHARA: ${url}`, html: simpleHtml(subject, lines, { label: 'Open OHARA', url }) });
+    await emailTeam(ctx, team.emails, `[OHARA] ${name}: ${alert.title}`, lines, { label: 'Open OHARA', url });
   }
   return { alert, duplicate: false };
 }
 
-/** SOS from the patient device. */
-export const raiseSos = (patientId: string, clientId?: string, at?: Date, note?: string) =>
-  raiseAlert(
-    { patientId, type: 'SOS', severity: 'CRITICAL', title: 'SOS pressed', detail: note ?? 'The help button was pressed on the patient screen. Please call now.', clientId, at },
-    { email: true },
+export interface SosLocation {
+  lat: number;
+  lng: number;
+  accuracy?: number;
+}
+
+/** SOS from the patient device: push + SMS + email at once. Location is kept only with location consent. */
+export async function raiseSos(patientId: string, clientId?: string, at?: Date, note?: string, location?: SosLocation) {
+  const loc = location && (await hasConsent(patientId, 'location')) ? location : undefined;
+  const where = loc ? ` Location: https://maps.google.com/?q=${loc.lat},${loc.lng}` : '';
+  return raiseAlert(
+    {
+      patientId,
+      type: 'SOS',
+      severity: 'CRITICAL',
+      title: 'SOS pressed',
+      detail: `${note ?? 'The help button was pressed on the patient screen. Please call now.'}${where}`,
+      clientId,
+      at,
+      location: loc ? { ...loc } : undefined,
+    },
+    { email: true, sms: true },
   );
+}

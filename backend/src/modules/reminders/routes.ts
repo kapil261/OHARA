@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { ReminderKind, type OccurrenceStatus } from '@prisma/client';
+import { env } from '../../config/env.js';
 import { audit } from '../../lib/audit.js';
+import { requireConsent } from '../../lib/consent.js';
 import { prisma } from '../../lib/prisma.js';
 import { parse } from '../../lib/validate.js';
 import { requirePatientAccess } from '../../middleware/access.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { badRequest, notFound } from '../../utils/errors.js';
+import { AppError, badRequest, notFound } from '../../utils/errors.js';
 import { buildDaySchedule, reminderStatus, runsOn } from '../../utils/schedule.js';
 import { isHHMM, weekdayOf, zonedTimeToUtc } from '../../utils/time.js';
 import { mediaUrlMap } from '../common.js';
@@ -29,8 +31,12 @@ const reminderBody = z.object({
   photoMediaId: z.string().nullable().optional(),
   daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   active: z.boolean().optional(),
+  // "Alert me if missed". Defaults to on for medicine and appointments.
+  alertIfMissed: z.boolean().optional(),
   clientId: z.string().max(64).optional(),
 });
+
+const alertsByDefault = (k: ReminderKind) => k === 'MEDICINE' || k === 'APPOINTMENT';
 
 async function loadPatient(id: string) {
   return prisma.patient.findUniqueOrThrow({ where: { id } });
@@ -99,6 +105,7 @@ remindersRouter.get('/patients/:patientId/reminders', requireAuth, requirePatien
       time: r.time,
       daysOfWeek: r.daysOfWeek,
       active: r.active,
+      alertIfMissed: r.alertIfMissed,
       voiceBy: r.voiceBy,
       scheduledAt: zonedTimeToUtc(date, r.time, patient.timezone).toISOString(),
       voiceClipUrl: r.voiceMediaId ? urls.get(r.voiceMediaId) : undefined,
@@ -119,7 +126,16 @@ remindersRouter.post('/patients/:patientId/reminders', requireAuth, requirePatie
     }
   }
   await checkMedia(patientId, [body.voiceMediaId, body.photoMediaId]);
-  const r = await prisma.reminder.create({ data: { ...body, detail: body.detail ?? '', voiceBy: body.voiceBy ?? '', daysOfWeek: body.daysOfWeek ?? [], patientId } });
+  const r = await prisma.reminder.create({
+    data: {
+      ...body,
+      detail: body.detail ?? '',
+      voiceBy: body.voiceBy ?? '',
+      daysOfWeek: body.daysOfWeek ?? [],
+      alertIfMissed: body.alertIfMissed ?? alertsByDefault(body.kind),
+      patientId,
+    },
+  });
   await audit('reminder.created', { actorId: req.auth!.sub, patientId, meta: { reminderId: r.id } });
   res.status(201).json(r);
 });
@@ -170,6 +186,7 @@ export async function recordReminderEvent(patientId: string, reminderId: string,
   }
   const reminder = await prisma.reminder.findFirst({ where: { id: reminderId, patientId } });
   if (!reminder) throw notFound('Reminder');
+  await requireConsent(patientId, 'reminders');
   const patient = await loadPatient(patientId);
   const at = input.at ? new Date(input.at) : new Date();
   const date = input.date ?? todayFor(patient, at);
@@ -179,6 +196,11 @@ export async function recordReminderEvent(patientId: string, reminderId: string,
     create: { reminderId, patientId, date, dueAt: zonedTimeToUtc(date, reminder.time, patient.timezone) },
     update: {},
   });
+  if (input.status === 'SNOOZED' && occ.snoozeCount >= env.MAX_SNOOZES) {
+    throw new AppError(409, 'SNOOZE_LIMIT', `This reminder was already snoozed ${env.MAX_SNOOZES} times. Please do it now or tap Done.`, {
+      snoozeCount: occ.snoozeCount,
+    });
+  }
   const snoozedUntil = input.status === 'SNOOZED' ? new Date(at.getTime() + (input.snoozeMinutes ?? 10) * 60_000) : null;
   await prisma.$transaction([
     prisma.reminderOccurrence.update({
@@ -188,12 +210,13 @@ export async function recordReminderEvent(patientId: string, reminderId: string,
         snoozedUntil,
         completedAt: input.status === 'DONE' ? at : null,
         // A snooze re-notifies when it expires.
-        ...(input.status === 'SNOOZED' ? { notifiedAt: null } : {}),
+        ...(input.status === 'SNOOZED' ? { notifiedAt: null, repeatedAt: null, snoozeCount: { increment: 1 } } : {}),
       },
     }),
     prisma.reminderEvent.create({ data: { reminderId, patientId, date, status: input.status, clientId: input.clientId, at } }),
   ]);
-  return { duplicate: false, status: reminderStatus(input.status), snoozedUntil: snoozedUntil?.toISOString() ?? null };
+  const snoozesLeft = Math.max(0, env.MAX_SNOOZES - occ.snoozeCount - (input.status === 'SNOOZED' ? 1 : 0));
+  return { duplicate: false, status: reminderStatus(input.status), snoozedUntil: snoozedUntil?.toISOString() ?? null, snoozesLeft };
 }
 
 /** Patient taps Done / Snooze. Idempotent by clientId so offline retries are safe. */

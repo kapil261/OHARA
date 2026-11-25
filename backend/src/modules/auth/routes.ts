@@ -5,6 +5,7 @@ import { authLimiter, otpLimiter } from '../../middleware/rateLimit.js';
 import { buildMe } from '../me/service.js';
 import { verifyAccessToken } from '../../lib/tokens.js';
 import {
+  type Contact,
   REFRESH_COOKIE,
   clearRefreshCookie,
   issueRefreshToken,
@@ -20,19 +21,33 @@ export const authRouter = Router();
 
 const email = z.string().trim().email('Enter a valid email address').max(254);
 
-authRouter.post('/auth/otp/request', otpLimiter, async (req, res) => {
-  const body = parse(z.object({ email }), req.body);
-  res.json(await requestOtp(body.email));
+const phone = z.string().trim().min(10, 'Enter a valid mobile number').max(16);
+// Exactly one of email / phone.
+const contactBody = z
+  .object({ email: email.optional(), phone: phone.optional() })
+  .refine((b) => Boolean(b.email) !== Boolean(b.phone), { message: 'Enter your email or your mobile number', path: ['email'] });
+const toContact = (b: { email?: string; phone?: string }): Contact => (b.phone ? { phone: b.phone } : { email: b.email! });
+
+// `/auth/otp/send` is the path used in the design docs; both work.
+authRouter.post(['/auth/otp/request', '/auth/otp/send'], otpLimiter, async (req, res) => {
+  const body = parse(contactBody, req.body);
+  res.json(await requestOtp(toContact(body)));
 });
 
 authRouter.post('/auth/otp/verify', authLimiter, async (req, res) => {
   const body = parse(
     z
-      .object({ email, otp: z.string().regex(/^\d{6}$/).optional(), code: z.string().regex(/^\d{6}$/).optional() })
+      .object({
+        email: email.optional(),
+        phone: phone.optional(),
+        otp: z.string().regex(/^\d{6}$/).optional(),
+        code: z.string().regex(/^\d{6}$/).optional(),
+      })
+      .refine((b) => Boolean(b.email) !== Boolean(b.phone), { message: 'Enter your email or your mobile number', path: ['email'] })
       .refine((b) => b.otp || b.code, { message: 'Enter the 6-digit code', path: ['otp'] }),
     req.body,
   );
-  const user = await verifyOtp(body.email, (body.otp ?? body.code)!);
+  const user = await verifyOtp(toContact(body), (body.otp ?? body.code)!);
   const token = await userAccessToken(user.id);
   const refresh = await issueRefreshToken(user.id);
   setRefreshCookie(res, refresh.raw);

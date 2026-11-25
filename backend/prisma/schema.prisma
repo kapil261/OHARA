@@ -52,11 +52,33 @@ enum MediaKind {
   VOICE
 }
 
+enum NotificationChannel {
+  PUSH
+  EMAIL
+  SMS
+}
+
+enum PackStatus {
+  PLANNED
+  DRAFT
+  PUBLISHED
+}
+
+enum ContentCategory {
+  OBJECT
+  SOUND
+  FOOD
+  FESTIVAL
+  ROUTINE
+}
+
 // ---------- People & auth ----------
 
 model User {
   id              String    @id @default(cuid())
-  email           String    @unique
+  // At least one of email / phone is set. Phone is E.164, e.g. "+919876543210".
+  email           String?   @unique
+  phone           String?   @unique
   name            String?
   role            Role      @default(CAREGIVER)
   activePatientId String?
@@ -69,18 +91,20 @@ model User {
   acks          Alert[]            @relation("AlertAckBy")
   auditLogs     AuditLog[]
   consents      Consent[]
+  visitNotes    VisitNote[]
 }
 
 model OtpCode {
-  id        String   @id @default(cuid())
-  email     String
-  codeHash  String
-  expiresAt DateTime
-  attempts  Int      @default(0)
-  consumed  Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  // Normalised email address or E.164 phone number the code was sent to.
+  identifier String   @map("email")
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int      @default(0)
+  consumed   Boolean  @default(false)
+  createdAt  DateTime @default(now())
 
-  @@index([email, createdAt])
+  @@index([identifier, createdAt])
 }
 
 model RefreshToken {
@@ -100,32 +124,37 @@ model RefreshToken {
 // ---------- Patient & care team ----------
 
 model Patient {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   displayName  String
   fullName     String?
   age          Int?
   place        String?
-  language     String   @default("English")
-  timezone     String   @default("Asia/Kolkata")
+  language     String    @default("English")
+  timezone     String    @default("Asia/Kolkata")
+  // Elder may answer reminders by saying "Done" (needs network for ASR).
+  voiceAnswers Boolean   @default(true)
   photoMediaId String?
   voiceMediaId String?
+  // Soft delete; the purge job removes everything 30 days later.
   deletedAt    DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  team         CareTeamMember[]
-  devices      Device[]
-  reminders    Reminder[]
-  occurrences  ReminderOccurrence[]
-  events       ReminderEvent[]
-  alerts       Alert[]
-  family       FamilyMember[]
-  media        MediaItem[]
-  sessions     GameSession[]
-  baselines    Baseline[]
-  consents     Consent[]
-  pairingCodes PairingCode[]
-  auditLogs    AuditLog[]
+  team          CareTeamMember[]
+  devices       Device[]
+  reminders     Reminder[]
+  occurrences   ReminderOccurrence[]
+  events        ReminderEvent[]
+  alerts        Alert[]
+  family        FamilyMember[]
+  media         MediaItem[]
+  sessions      GameSession[]
+  baselines     Baseline[]
+  consents      Consent[]
+  pairingCodes  PairingCode[]
+  auditLogs     AuditLog[]
+  visitNotes    VisitNote[]
+  notifications NotificationLog[]
 }
 
 model CareTeamMember {
@@ -139,6 +168,7 @@ model CareTeamMember {
   isOwner     Boolean  @default(false)
   hue         String   @default("violet")
   notifyEmail Boolean  @default(true)
+  notifySms   Boolean  @default(true)
   createdAt   DateTime @default(now())
 
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -151,6 +181,7 @@ model Consent {
   id          String    @id @default(cuid())
   patientId   String
   grantedById String
+  // care_data (covers reminders, games, analytics) | reminders | games | analytics | location
   scope       String    @default("care_data")
   guardian    Boolean   @default(true)
   text        String?
@@ -159,6 +190,8 @@ model Consent {
 
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
   grantedBy User    @relation(fields: [grantedById], references: [id], onDelete: Cascade)
+
+  @@index([patientId, scope])
 }
 
 // ---------- Patient device (the tablet/phone the elder uses) ----------
@@ -167,6 +200,8 @@ model Device {
   id         String    @id @default(cuid())
   patientId  String
   label      String?
+  model      String?
+  appVersion String?
   lastSeenAt DateTime?
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())
@@ -176,16 +211,21 @@ model Device {
 }
 
 model PairingCode {
-  id         String    @id @default(cuid())
-  code       String    @unique
-  secretHash String
-  expiresAt  DateTime
-  patientId  String?
-  deviceId   String?
-  claimedAt  DateTime?
+  id          String    @id @default(cuid())
+  // Device-generated codes are stored as typed; caregiver-generated 6-digit codes are stored as a hash.
+  code        String    @unique
+  secretHash  String
+  expiresAt   DateTime
+  patientId   String?
+  deviceId    String?
+  claimedAt   DateTime?
   // Set when the device has collected its token once
   deliveredAt DateTime?
-  createdAt  DateTime  @default(now())
+  // Set for caregiver-generated codes
+  createdById String?
+  deviceModel String?
+  appVersion  String?
+  createdAt   DateTime  @default(now())
 
   patient Patient? @relation(fields: [patientId], references: [id], onDelete: Cascade)
 }
@@ -206,22 +246,24 @@ model PushSubscription {
 // ---------- Reminders ----------
 
 model Reminder {
-  id           String       @id @default(cuid())
-  patientId    String
-  kind         ReminderKind
-  time         String // "HH:MM" in the patient's timezone
-  title        String
-  detail       String       @default("")
+  id            String       @id @default(cuid())
+  patientId     String
+  kind          ReminderKind
+  time          String // "HH:MM" in the patient's timezone
+  title         String
+  detail        String       @default("")
   // Whose voice plays it, e.g. "Rina"
-  voiceBy      String       @default("")
-  voiceMediaId String?
-  photoMediaId String?
+  voiceBy       String       @default("")
+  voiceMediaId  String?
+  photoMediaId  String?
   // 0 = Sunday … 6 = Saturday; empty = every day
-  daysOfWeek   Int[]
-  active       Boolean      @default(true)
-  clientId     String?      @unique
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  daysOfWeek    Int[]
+  active        Boolean      @default(true)
+  // "Alert me if missed": push, then SMS and email to the care team.
+  alertIfMissed Boolean      @default(true)
+  clientId      String?      @unique
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   patient     Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
   occurrences ReminderOccurrence[]
@@ -239,8 +281,12 @@ model ReminderOccurrence {
   dueAt               DateTime
   status              OccurrenceStatus @default(PENDING)
   snoozedUntil        DateTime?
+  snoozeCount         Int              @default(0)
   notifiedAt          DateTime?
+  // Second ring, REPEAT_AFTER_MIN after the first
+  repeatedAt          DateTime?
   caregiverNotifiedAt DateTime?
+  smsAt               DateTime?
   emailedAt           DateTime?
   completedAt         DateTime?
   updatedAt           DateTime         @updatedAt
@@ -281,10 +327,39 @@ model Alert {
   acknowledged   Boolean   @default(false)
   acknowledgedAt DateTime?
   acknowledgedBy String?
+  resolved       Boolean   @default(false)
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  resolutionNote String?
+  // SOS location { lat, lng, accuracy } (stored only with location consent)
+  location       Json?
+  // Source of the alert, used for escalation and de-duplication
+  occurrenceId   String?
+  deviceId       String?
   createdAt      DateTime  @default(now())
 
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
   ackBy   User?   @relation("AlertAckBy", fields: [acknowledgedBy], references: [id], onDelete: SetNull)
+
+  @@index([patientId, createdAt])
+  @@index([occurrenceId])
+}
+
+// ---------- Notifications ----------
+
+// One row per email / SMS sent to the care team.
+model NotificationLog {
+  id        String              @id @default(cuid())
+  patientId String?
+  alertId   String?
+  channel   NotificationChannel
+  // Masked recipient (never the full email or number)
+  recipient String
+  ok        Boolean
+  error     String?
+  createdAt DateTime            @default(now())
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
   @@index([patientId, createdAt])
 }
@@ -320,6 +395,8 @@ model MediaItem {
   bytes        Int?
   label        String?
   personName   String?
+  // e.g. "praise" (played after a game), "greeting", "reminder"
+  purpose      String?
   uploadedBy   String?
   createdAt    DateTime  @default(now())
 
@@ -362,6 +439,76 @@ model Baseline {
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
   @@unique([patientId, metric])
+}
+
+// ---------- Health worker visits ----------
+
+model VisitNote {
+  id        String   @id @default(cuid())
+  patientId String
+  authorId  String?
+  text      String
+  visitedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  author  User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, visitedAt])
+}
+
+// ---------- Culture packs (admin content for games) ----------
+
+model CulturePack {
+  id          String     @id @default(cuid())
+  // Region slug, e.g. "assam", "bodoland", "manipur"
+  region      String     @unique
+  name        String
+  // Languages that must have audio for every item, e.g. ["as", "hi", "en"]
+  languages   String[]
+  status      PackStatus @default(DRAFT)
+  // Latest published version (0 = never published)
+  version     Int        @default(0)
+  publishedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  items    ContentItem[]
+  versions CulturePackVersion[]
+}
+
+model ContentItem {
+  id        String          @id @default(cuid())
+  packId    String
+  category  ContentCategory
+  label     String
+  // Label per language code
+  labels    Json            @default("{}")
+  tags      String[]
+  // Cloudinary public id or an https URL
+  image     String?
+  // Audio per language code: { "<lang>": "<public id or https URL>" }
+  audio     Json            @default("{}")
+  sortOrder Int             @default(0)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  pack CulturePack @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@index([packId, category])
+}
+
+// Immutable snapshot of a pack at publish time; phones download the latest one on sync.
+model CulturePackVersion {
+  id          String   @id @default(cuid())
+  packId      String
+  version     Int
+  items       Json
+  publishedAt DateTime @default(now())
+
+  pack CulturePack @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@unique([packId, version])
 }
 
 // ---------- Audit ----------

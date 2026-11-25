@@ -3,18 +3,22 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { sendMail, simpleHtml } from '../../integrations/mailer.js';
+import { sendAlertSms } from '../../integrations/sms.js';
 import { audit } from '../../lib/audit.js';
 import { prisma } from '../../lib/prisma.js';
 import { parse } from '../../lib/validate.js';
 import { ALL_PERMISSIONS, requirePatientAccess } from '../../middleware/access.js';
 import { requireAuth, requireUser } from '../../middleware/auth.js';
+import { normalizePhone, userLabel } from '../../utils/contact.js';
 import { badRequest, conflict, notFound } from '../../utils/errors.js';
 
 export const teamRouter = Router();
 
 const permissions = z.array(z.enum(ALL_PERMISSIONS)).max(ALL_PERMISSIONS.length);
 const inviteBody = z.object({
-  email: z.string().trim().toLowerCase().email(),
+  // Invite by email or by Indian mobile number (one of them).
+  email: z.string().trim().toLowerCase().email().optional(),
+  phone: z.string().trim().max(16).optional(),
   name: z.string().trim().max(80).optional(),
   relation: z.string().trim().max(80).optional(),
   role: z.enum(['CAREGIVER', 'HEALTH_WORKER']).default('CAREGIVER'),
@@ -26,20 +30,23 @@ const patchBody = z.object({
   relation: z.string().trim().max(80).nullable().optional(),
   hue: z.string().max(20).optional(),
   notifyEmail: z.boolean().optional(),
+  notifySms: z.boolean().optional(),
 });
 
 type MemberRow = Prisma.CareTeamMemberGetPayload<{ include: { user: true } }>;
 const memberDto = (m: MemberRow) => ({
   id: m.id,
   userId: m.userId,
-  name: m.user.name ?? m.user.email.split('@')[0],
+  name: userLabel(m.user),
   email: m.user.email,
+  phone: m.user.phone,
   role: m.relation ?? (m.memberRole === 'HEALTH_WORKER' ? 'Health worker' : 'Caregiver'),
   memberRole: m.memberRole,
   relation: m.relation,
   permissions: m.isOwner ? [...ALL_PERMISSIONS] : m.permissions,
   hue: m.hue,
   notifyEmail: m.notifyEmail,
+  notifySms: m.notifySms,
   isOwner: m.isOwner,
 });
 
@@ -50,10 +57,14 @@ teamRouter.get('/patients/:patientId/team', requireAuth, requireUser, requirePat
 
 teamRouter.post('/patients/:patientId/team', requireAuth, requireUser, requirePatientAccess('manage_team'), async (req, res) => {
   const body = parse(inviteBody, req.body);
+  if (Boolean(body.email) === Boolean(body.phone)) throw badRequest('Enter an email address or a mobile number');
+  const phone = body.phone ? normalizePhone(body.phone) : null;
+  if (body.phone && !phone) throw badRequest('Enter a valid Indian mobile number');
+  const key = phone ? { phone } : { email: body.email! };
   const patientId = req.access!.patientId;
   const user = await prisma.user.upsert({
-    where: { email: body.email },
-    create: { email: body.email, name: body.name, role: body.role, activePatientId: patientId },
+    where: key,
+    create: { ...key, name: body.name, role: body.role, activePatientId: patientId },
     update: {},
   });
   let member: MemberRow;
@@ -68,14 +79,20 @@ teamRouter.post('/patients/:patientId/team', requireAuth, requireUser, requirePa
   }
 
   const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { displayName: true } });
-  const inviter = await prisma.user.findUnique({ where: { id: req.auth!.sub }, select: { name: true, email: true } });
-  const url = `${env.APP_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(body.email)}`;
-  const subject = `You've been added to ${patient?.displayName ?? 'a'} care team on OHARA`;
-  const lines = [
-    `${inviter?.name ?? 'A family member'} added you to the care team for ${patient?.displayName ?? 'a patient'}.`,
-    'Sign in with this email address; we will send you a one-time code. No password needed.',
-  ];
-  await sendMail({ to: body.email, subject, text: `${lines.join('\n')}\n\n${url}`, html: simpleHtml(subject, lines, { label: 'Open OHARA', url }) });
+  const inviter = await prisma.user.findUnique({ where: { id: req.auth!.sub }, select: { name: true, email: true, phone: true } });
+  const patientName = patient?.displayName ?? 'a patient';
+  const inviterName = inviter ? userLabel(inviter) : 'A family member';
+  if (phone) {
+    await sendAlertSms(phone, patientName, `${inviterName} added you to the OHARA care team. Sign in with this number.`);
+  } else {
+    const url = `${env.APP_URL.replace(/\/$/, '')}/login?email=${encodeURIComponent(body.email!)}`;
+    const subject = `You've been added to ${patient?.displayName ?? 'a'} care team on OHARA`;
+    const lines = [
+      `${inviterName} added you to the care team for ${patientName}.`,
+      'Sign in with this email address; we will send you a one-time code. No password needed.',
+    ];
+    await sendMail({ to: body.email!, subject, text: `${lines.join('\n')}\n\n${url}`, html: simpleHtml(subject, lines, { label: 'Open OHARA', url }) });
+  }
   await audit('team.invited', { actorId: req.auth!.sub, patientId, meta: { memberId: member.id, role: body.role } });
   res.status(201).json(memberDto(member));
 });
