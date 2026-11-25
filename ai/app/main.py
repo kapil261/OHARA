@@ -16,7 +16,9 @@ from app.config import (
     BACKEND_ORIGIN,
     SERVICE_VERSION,
     DEFAULT_EWMA_ALPHA,
+    MIN_BASELINE_SAMPLES,
     MIN_BASELINE_DAYS,
+    IS_PROD,
 )
 from app.schemas import (
     HealthResponse,
@@ -37,24 +39,40 @@ from app.decline.detector import evaluate_decline
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("ohara-ai")
 
-# Lock down CORS strictly to backend origin (eliminates wildcard allow_origins with credentials)
-allowed_origins = [
-    origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", f"{BACKEND_ORIGIN},http://localhost:4000,http://127.0.0.1:4000").split(",")
-    if origin.strip()
-]
+# Lock down CORS: Allow ONLY BACKEND_ORIGIN in production. In dev, allow localhost.
+if IS_PROD:
+    if not BACKEND_ORIGIN:
+        logger.warning("BACKEND_ORIGIN is not configured in production; CORS origins will be empty.")
+        allowed_origins = []
+    else:
+        allowed_origins = [origin.strip() for origin in BACKEND_ORIGIN.split(",") if origin.strip()]
+else:
+    dev_origins = {
+        BACKEND_ORIGIN or "http://localhost:4000",
+        "http://localhost:4000",
+        "http://127.0.0.1:4000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    }
+    allowed_origins = [o for o in dev_origins if o]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Logs active models, hyperparameters, and security configuration at startup."""
+    """Enforces production configuration and logs active models at startup."""
+    # Production guard: Refuse to start if ML_API_KEY is missing in production
+    if IS_PROD and not os.getenv("ML_API_KEY"):
+        logger.critical("FATAL: ML_API_KEY environment variable is required in production! Service refusing to start.")
+        raise RuntimeError("ML_API_KEY environment variable must be set in production.")
+
     logger.info("=" * 60)
     logger.info("OHARA AI / ML Microservice Started (v%s)", SERVICE_VERSION)
     logger.info(
-        "Hyperparameters: TARGET_SUCCESS_RATE=%.2f | EWMA_ALPHA=%.2f | MIN_BASELINE_DAYS=%d",
+        "Environment: %s | Hyperparameters: TARGET_SUCCESS_RATE=%.2f | EWMA_ALPHA=%.2f | MIN_BASELINE_SAMPLES=%d",
+        "PRODUCTION" if IS_PROD else "DEVELOPMENT",
         TARGET_SUCCESS_RATE,
         DEFAULT_EWMA_ALPHA,
-        MIN_BASELINE_DAYS,
+        MIN_BASELINE_SAMPLES,
     )
     logger.info("CORS Policy: Restricted to %s", allowed_origins)
     logger.info("Authentication: X-ML-Key header enforced on computational endpoints")
@@ -88,7 +106,7 @@ api_key_header = APIKeyHeader(name="X-ML-Key", auto_error=False)
 def verify_ml_key(api_key: Optional[str] = Security(api_key_header)) -> str:
     """Verifies that requests to ML endpoints supply the correct X-ML-Key."""
     expected = os.getenv("ML_API_KEY", ML_API_KEY)
-    if not api_key or api_key != expected:
+    if not expected or not api_key or api_key != expected:
         logger.warning("Rejected unauthorized ML request with invalid or missing X-ML-Key header")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -112,7 +130,7 @@ def version_info() -> VersionResponse:
         targetSuccessRate=TARGET_SUCCESS_RATE,
         models={
             "difficulty": "Elo Rating (errorless learning dignity credit 0.7, step clamp +/-1)",
-            "baseline": f"{MIN_BASELINE_DAYS}-day Median Bootstrap + EWMA (alpha={DEFAULT_EWMA_ALPHA})",
+            "baseline": f"{MIN_BASELINE_SAMPLES}-session Median Bootstrap + EWMA (alpha={DEFAULT_EWMA_ALPHA})",
             "decline": "Z-score Multi-day Persistence Filter (>=3 days, elder self-baseline)",
         },
     )
@@ -209,6 +227,7 @@ def decline_detection(req: DeclineRequest) -> DeclineResponse:
     """
     Evaluates recent performance against the patient's personal baseline using z-scores:
     - Compares elder strictly against their own normal (never population limits)
+    - If patient has no baseline yet or is in calibration (< 14 days), returns decline: false with reason 'Baseline not ready'
     - Uses z-score and multi-day persistence checks from decline/detector.py
     - Requires multi-day persistence to eliminate false alarms from transient bad days
     - Flags mild, moderate, or sharp decline severity

@@ -1,11 +1,21 @@
 """OHARA AI/ML Service Configuration and Hyperparameters."""
 
 import os
-from typing import Set
+from typing import Optional, Set
 
-# --- Service & Security Configuration ---
-ML_API_KEY: str = os.getenv("ML_API_KEY", "ohara-ml-secret-key")
-BACKEND_ORIGIN: str = os.getenv("BACKEND_ORIGIN", "http://localhost:4000")
+# --- Environment & Security Configuration ---
+ENVIRONMENT: str = os.getenv("ENVIRONMENT", os.getenv("NODE_ENV", "development")).lower()
+IS_PROD: bool = ENVIRONMENT == "production"
+
+# In production, ML_API_KEY must be explicitly set via environment variables.
+# For local development only, fall back to a dev-only placeholder.
+DEV_DEFAULT_KEY = "dev-only-ml-secret-key"
+ML_API_KEY: Optional[str] = os.getenv("ML_API_KEY")
+if not ML_API_KEY and not IS_PROD:
+    ML_API_KEY = DEV_DEFAULT_KEY
+
+# Backend origin for strict CORS policy
+BACKEND_ORIGIN: Optional[str] = os.getenv("BACKEND_ORIGIN")
 SERVICE_VERSION: str = "1.0.0"
 
 # --- Elo Adaptive Difficulty Constants ---
@@ -27,12 +37,14 @@ LEVEL_BASE_RATING: float = 1000.0
 LEVEL_STEP_RATING: float = 100.0
 
 # --- Personal Baseline Tracking Constants ---
-MIN_BASELINE_DAYS: int = 14
+# Agreed with Abhishek: sampleSize represents the number of completed game sessions (not calendar days)
+MIN_BASELINE_SAMPLES: int = 5
+MIN_BASELINE_DAYS: int = MIN_BASELINE_SAMPLES  # Backwards compatibility alias
 DEFAULT_EWMA_ALPHA: float = 0.08  # Calibrated via synthetic patient simulations (stable vs decline)
 EPSILON_STD: float = 1e-4  # Floor to prevent division by zero in zero-variance metrics
 
 # --- Decline Detection Constants ---
-PERSISTENCE_THRESHOLD_DAYS: int = 3  # Must persist for at least 3 observations/days
+PERSISTENCE_THRESHOLD_DAYS: int = 3  # Must persist for at least 3 observations/sessions
 Z_THRESHOLD_MILD: float = 1.5
 Z_THRESHOLD_MODERATE: float = 2.0
 Z_THRESHOLD_SHARP: float = 2.8

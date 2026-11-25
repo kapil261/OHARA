@@ -74,9 +74,9 @@ def test_inverted_metric_latency_decline():
 
 
 def test_cold_start_suppression():
-    # Baseline with only 5 days (under 14-day requirement)
+    # Baseline with only 3 sessions (under 5-session requirement)
     baseline = {
-        "accuracy": BaselineMetricData(median=0.80, ewma=0.80, std=0.05, count=5)
+        "accuracy": BaselineMetricData(median=0.80, ewma=0.80, std=0.05, count=3)
     }
     recent = [
         RecentMetric(metric="accuracy", values=[0.40, 0.40, 0.40])
@@ -85,6 +85,16 @@ def test_cold_start_suppression():
     # Decline must be suppressed during cold start baseline calibration
     assert res.declined is False
     assert res.severity == "none"
+    assert "Baseline not ready" in res.reason
+
+
+def test_missing_baseline_returns_baseline_not_ready():
+    # Patient has no baseline yet
+    res = evaluate_decline("p1", [RecentMetric(metric="accuracy", values=[0.40, 0.40, 0.40])], {})
+    assert res.declined is False
+    assert res.decline is False
+    assert res.severity == "none"
+    assert "Baseline not ready" in res.reason
 
 
 def test_empty_input_handling():

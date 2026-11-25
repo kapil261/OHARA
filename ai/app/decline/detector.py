@@ -1,4 +1,4 @@
-"""Cognitive decline detection engine with multi-day persistence filtering."""
+"""Cognitive decline detection engine with multi-session persistence filtering."""
 
 import numpy as np
 from typing import Dict, List, Optional
@@ -9,7 +9,7 @@ from app.config import (
     Z_THRESHOLD_SHARP,
     INVERTED_METRICS,
     EPSILON_STD,
-    MIN_BASELINE_DAYS,
+    MIN_BASELINE_SAMPLES,
 )
 from app.schemas import (
     RecentMetric,
@@ -31,7 +31,8 @@ def evaluate_decline(
 ) -> DeclineResponse:
     """
     Evaluates recent patient performance against personal baseline using z-scores.
-    Implements multi-day persistence checks to eliminate false alarms from transient bad days.
+    Implements multi-session persistence checks to eliminate false alarms from transient bad rounds.
+    If baseline is missing or has fewer than MIN_BASELINE_SAMPLES (5 sessions), returns decline: false with 'Baseline not ready'.
     """
     if not recent_metrics or not baseline_map:
         return DeclineResponse(
@@ -44,8 +45,8 @@ def evaluate_decline(
             severity="none",
             flagged=False,
             persistenceCount=0,
-            notes="Insufficient recent or baseline data for decline analysis.",
-            reason="Insufficient recent or baseline data for decline analysis.",
+            notes="Baseline not ready (no baseline history available for patient)",
+            reason="Baseline not ready (no baseline history available for patient)",
         )
 
     # Normalize baseline map keys for case-insensitive lookup
@@ -56,7 +57,8 @@ def evaluate_decline(
     most_severe_result: Optional[DeclineResponse] = None
     highest_severity_rank = -1
     severity_order = {"none": 0, "mild": 1, "moderate": 2, "sharp": 3}
-    evaluated_any = False
+    evaluated_established_count = 0
+    cold_start_count = 0
 
     for item in recent_metrics:
         metric = item.metric
@@ -71,12 +73,12 @@ def evaluate_decline(
         base_data = normalized_baseline[norm_key]
         sample_count = base_data.get_sample_count()
 
-        # Cold start check: do not flag decline if baseline has fewer than MIN_BASELINE_DAYS
-        if sample_count is not None and sample_count < MIN_BASELINE_DAYS:
-            evaluated_any = True
+        # Cold start check: do not flag decline if baseline has fewer than MIN_BASELINE_SAMPLES (5 sessions)
+        if sample_count is not None and sample_count < MIN_BASELINE_SAMPLES:
+            cold_start_count += 1
             continue
 
-        evaluated_any = True
+        evaluated_established_count += 1
         std = max(base_data.std, EPSILON_STD)
         ewma = base_data.ewma
         mean_recent = float(np.mean(values))
@@ -89,7 +91,6 @@ def evaluate_decline(
         directional_z = raw_z if inverted else -raw_z
 
         # Check persistence across individual recent observations
-        # An observation is deviating if its individual Z meets or exceeds the mild threshold
         persisting_count = 0
         for val in values:
             val_raw_z = (val - ewma) / std
@@ -132,7 +133,7 @@ def evaluate_decline(
         else:
             reason_text = (
                 f"Metric '{metric}' recent mean is {mean_recent:.3f} vs baseline EWMA {ewma:.3f} "
-                f"(z={raw_z:.2f}). Did not meet multi-day persistence requirement."
+                f"(z={raw_z:.2f}). Did not meet multi-session persistence requirement."
             )
 
         rank = severity_order[severity]
@@ -156,11 +157,10 @@ def evaluate_decline(
         return most_severe_result
 
     fallback_metric = recent_metrics[0].metric if recent_metrics else "none"
-    default_msg = (
-        "Baseline calibration in progress (< 14 days); decline detection suppressed."
-        if evaluated_any and not any(len(m.values) for m in recent_metrics if m.values)
-        else "Metrics are within normal personal variation ranges."
-    )
+    if cold_start_count > 0 and evaluated_established_count == 0:
+        default_msg = f"Baseline not ready (needs at least {MIN_BASELINE_SAMPLES} sessions to establish baseline)"
+    else:
+        default_msg = "Metrics are within normal personal variation ranges."
 
     return DeclineResponse(
         patientId=patient_id,

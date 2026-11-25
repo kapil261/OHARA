@@ -1,9 +1,9 @@
-"""Personal baseline tracker using 14-day median bootstrap and EWMA."""
+"""Personal baseline tracker using median bootstrap and EWMA."""
 
 import numpy as np
 from typing import List, Optional, Tuple
 from app.config import (
-    MIN_BASELINE_DAYS,
+    MIN_BASELINE_SAMPLES,
     DEFAULT_EWMA_ALPHA,
     EPSILON_STD,
 )
@@ -17,8 +17,8 @@ def compute_baseline_stats(
 ) -> Tuple[float, float, float, int, str]:
     """
     Computes personal baseline statistics:
-    - First 14 days: Median-based robust bootstrap + sample standard deviation.
-    - Subsequent days: Exponentially Weighted Moving Average (EWMA) updates.
+    - First MIN_BASELINE_SAMPLES sessions (5): Median-based robust bootstrap + sample standard deviation.
+    - Subsequent sessions: Exponentially Weighted Moving Average (EWMA) updates.
     
     Returns: (median, ewma, std, count, status)
     """
@@ -29,7 +29,7 @@ def compute_baseline_stats(
                 existing_baseline.ewma,
                 existing_baseline.std,
                 existing_baseline.count or 0,
-                "established" if (existing_baseline.count or 0) >= MIN_BASELINE_DAYS else "establishing",
+                "established" if (existing_baseline.count or 0) >= MIN_BASELINE_SAMPLES else "establishing",
             )
         return 0.0, 0.0, EPSILON_STD, 0, "establishing"
 
@@ -49,14 +49,14 @@ def compute_baseline_stats(
     else:
         # Cold start: initial EWMA starts from initial median
         total_count = count
-        if count <= MIN_BASELINE_DAYS:
+        if count <= MIN_BASELINE_SAMPLES:
             ewma_val = median_val
         else:
-            # First 14 days anchor the median, subsequent days update EWMA
-            initial_median = float(np.median(daily_values[:MIN_BASELINE_DAYS]))
+            # First MIN_BASELINE_SAMPLES sessions anchor the median, subsequent sessions update EWMA
+            initial_median = float(np.median(daily_values[:MIN_BASELINE_SAMPLES]))
             ewma_val = initial_median
-            for v in daily_values[MIN_BASELINE_DAYS:]:
+            for v in daily_values[MIN_BASELINE_SAMPLES:]:
                 ewma_val = alpha * float(v) + (1.0 - alpha) * ewma_val
 
-    status = "established" if total_count >= MIN_BASELINE_DAYS else "establishing"
+    status = "established" if total_count >= MIN_BASELINE_SAMPLES else "establishing"
     return round(median_val, 4), round(ewma_val, 4), round(std_val, 4), total_count, status

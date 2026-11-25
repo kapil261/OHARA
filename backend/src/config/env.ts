@@ -43,7 +43,7 @@ const schema = z.object({
   // Blank = ML service not deployed; the backend uses its local heuristics.
   ML_URL: z.string().optional(),
   ML_TIMEOUT_MS: z.coerce.number().default(3000),
-  ML_API_KEY: z.string().default('ohara-ml-secret-key'),
+  ML_API_KEY: z.string().optional(),
 
   BHASHINI_USER_ID: z.string().optional(),
   BHASHINI_API_KEY: z.string().optional(),
@@ -66,6 +66,11 @@ export const isTest = env.NODE_ENV === 'test';
 
 if (isProd && env.JWT_SECRET.startsWith('dev-only')) {
   console.error('JWT_SECRET must be set in production.');
+  process.exit(1);
+}
+
+if (isProd && Boolean(env.ML_URL) && (!env.ML_API_KEY || env.ML_API_KEY.startsWith('dev-only'))) {
+  console.error('ML_API_KEY must be set in production when ML_URL is configured.');
   process.exit(1);
 }
 

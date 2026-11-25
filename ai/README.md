@@ -10,7 +10,7 @@ FastAPI microservice providing adaptive cognitive game difficulty (Elo rating wi
 
 ## Tech Stack & Dependency Optimization
 Lean, pinned dependencies for minimal Docker image size and rapid cold starts:
-- **Python**: 3.12
+- **Python**: 3.12 (`FROM python:3.12-slim`)
 - **fastapi** `==0.115.6`
 - **uvicorn[standard]** `==0.32.1`
 - **pydantic** `==2.14.3`
@@ -18,26 +18,38 @@ Lean, pinned dependencies for minimal Docker image size and rapid cold starts:
 - **pytest** `==8.3.4`
 - **httpx** `==0.28.1`
 
-*(Note: Unused dependencies like `pandas` and `scikit-learn` were eliminated to drastically reduce container footprint on free tier hosting).*
+*(Note: Unused dependencies `pandas` and `scikit-learn` were eliminated to drastically reduce container footprint and build time).*
 
 ---
 
 ## Security & Architecture
 
-1. **Authentication (`X-ML-Key` Header)**:
-   - All computational endpoints (`/difficulty`, `/baseline`, `/decline`) require the `X-ML-Key` header matching `ML_API_KEY` (defaults to `ohara-ml-secret-key` in development).
-   - Requests without a valid key return `401 Unauthorized`.
-   - `/health` and `/version` remain open for orchestrator liveness and status checks.
+### 1. Authentication (`X-ML-Key` Header)
+- All computational endpoints (`/difficulty`, `/baseline`, `/decline`) require the `X-ML-Key` header matching `ML_API_KEY`.
+- **Production Guard:** In production (`ENVIRONMENT=production` or `NODE_ENV=production`), both the AI microservice and backend **refuse to start** if `ML_API_KEY` is not explicitly set in the environment or if it contains a `dev-only` placeholder.
+- **Local Development:** A development placeholder (`dev-only-ml-secret-key`) is permitted for local offline developer workflows.
+- Requests without a valid key return `401 Unauthorized`.
+- `/health` and `/version` remain open for orchestrator liveness and status checks.
 
-2. **Locked-Down CORS**:
-   - Browser cross-origin wildcarding (`*`) with credentials is removed.
-   - CORS is restricted strictly to backend origins (`BACKEND_ORIGIN`, e.g. `http://localhost:4000`, `http://127.0.0.1:4000`).
+### 2. Locked-Down CORS
+- **Production:** Restricts CORS strictly to the configured `BACKEND_ORIGIN` (no localhost, no wildcard `*`).
+- **Development:** Permits `localhost:4000`, `127.0.0.1:4000`, and `localhost:5173`.
 
-3. **Unified Success Target**:
-   - Both the AI microservice and backend local heuristics share an identical target success rate of **78% (`TARGET_SUCCESS_RATE = 0.78`)**.
+### 3. Unified Success Target
+- Both the AI microservice and backend local heuristics share an identical target success rate of **78% (`TARGET_SUCCESS_RATE = 0.78`)**.
 
-4. **Self-Baseline Comparison Only**:
-   - The `/decline` endpoint evaluates elders strictly against their own established normal (never arbitrary population thresholds like accuracy < 62% or latency > 3.2s).
+### 4. Self-Baseline Comparison & Cold Start Handling
+- The `/decline` endpoint evaluates elders strictly against their own established normal (never arbitrary population thresholds).
+- **New Patients (< 14 days):** During the first ~14 days (or when no baseline exists yet in the database), `/decline` returns:
+  `{ "decline": false, "score": 0.0, "reason": "Baseline not ready (establishing 14-day calibration period)" }`.
+  It never crashes and suppresses false alarms.
+
+---
+
+## Baseline Architecture & Ownership Note
+- **Database Ownership:** In OHARA's architecture, baseline calculation and persistence are owned and stored by the backend (`recomputeBaselines()` in `backend/src/modules/games/service.ts` writing to PostgreSQL `Baseline` table).
+- **Stateless AI Integration:** The backend sends the patient's database-stored baseline metrics (`accuracy` and `responseTimeMs`) inside the `POST /decline` request. The AI microservice computes the Z-scores and evaluates multi-day persistence across recent game sessions.
+- **`/baseline` Endpoint Status:** The `POST /baseline` endpoint in this service is maintained as an optional standalone/stateless calculation endpoint, but is not called directly by the backend runtime.
 
 ---
 
@@ -110,50 +122,14 @@ Evaluates multi-day performance against the patient's personal baseline using Z-
   "severity": "sharp",
   "flagged": true,
   "persistenceCount": 3,
-  "reason": "Metric 'accuracy' recent mean is 0.423 vs baseline EWMA 0.780 (z=-5.95). Persisted for 3/3 recent observations.",
-  "notes": "Metric 'accuracy' recent mean is 0.423 vs baseline EWMA 0.780 (z=-5.95). Persisted for 3/3 recent observations."
+  "reason": "Metric 'accuracy' recent mean is 0.423 vs baseline EWMA 0.780 (z=-5.95). Persisted for 3/3 recent observations."
 }
 ```
 *Backend reads: `decline`, `score`, `reason`.*
 
 ---
 
-### 3. `POST /baseline`
-Bootstraps personal 14-day median baseline or updates Exponentially Weighted Moving Average (EWMA with $\alpha = 0.08$).
-
-**Headers:** `X-ML-Key: <ML_API_KEY>`, `Content-Type: application/json`
-
-**Request:**
-```json
-{
-  "patientId": "p-101",
-  "metric": "accuracy",
-  "dailyValues": [0.75, 0.80, 0.78, 0.82, 0.77, 0.79, 0.81, 0.76, 0.80, 0.78, 0.82, 0.85, 0.79, 0.81],
-  "existingBaseline": {
-    "median": 0.80,
-    "ewma": 0.78,
-    "std": 0.05,
-    "count": 14
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "patientId": "p-101",
-  "metric": "accuracy",
-  "status": "established",
-  "daysCounted": 15,
-  "median": 0.80,
-  "ewma": 0.78,
-  "std": 0.05
-}
-```
-
----
-
-### 4. `GET /version`
+### 3. `GET /version`
 Telemetry endpoint reporting service version, target success rate, and active mathematical models.
 
 **Response:**
@@ -172,7 +148,7 @@ Telemetry endpoint reporting service version, target success rate, and active ma
 
 ---
 
-### 5. `GET /health`
+### 4. `GET /health`
 Liveness probe for orchestrators and Docker health checks.
 
 **Response:**
@@ -195,4 +171,4 @@ pip install -r requirements.txt
 pytest -q
 ```
 
-All 31 test cases (including Elo rating, 14-day bootstrap, EWMA updates, cold start suppression, multi-day persistence filtering, empty sessions, single session isolation, extreme response times, API key enforcement, and `/version`) pass cleanly.
+All 32 test cases pass cleanly across Elo difficulty, 14-day bootstrap, EWMA updates, cold start suppression, multi-day persistence filtering, empty sessions, single session isolation, extreme response times, API key enforcement, and `/version`.

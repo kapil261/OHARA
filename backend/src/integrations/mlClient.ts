@@ -1,4 +1,4 @@
-import { env, features } from '../config/env.js';
+import { env, features, isProd } from '../config/env.js';
 
 /**
  * Client for the optional ML service (FastAPI in ai/). Every call returns null when
@@ -7,16 +7,26 @@ import { env, features } from '../config/env.js';
 async function call<T>(path: string, body: unknown): Promise<T | null> {
   if (!features.ml) return null;
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const key = env.ML_API_KEY || (!isProd ? 'dev-only-ml-secret-key' : undefined);
+    if (key) {
+      headers['X-ML-Key'] = key;
+    }
+
     const res = await fetch(`${env.ML_URL!.replace(/\/$/, '')}${path}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-ML-Key': env.ML_API_KEY || 'ohara-ml-secret-key',
-      },
+      headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(env.ML_TIMEOUT_MS),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (res.status === 401) {
+        console.warn(`[ml] ML auth failed: check ML_API_KEY (endpoint ${path} returned 401 Unauthorized)`);
+      } else {
+        console.warn(`[ml] ${path} returned HTTP ${res.status}: ${res.statusText}`);
+      }
+      return null;
+    }
     return (await res.json()) as T;
   } catch (err) {
     console.warn(`[ml] ${path} unavailable, using local fallback:`, (err as Error).message);

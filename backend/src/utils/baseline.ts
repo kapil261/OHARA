@@ -47,7 +47,7 @@ export function detectDeclineLocally(
   base: { accuracy: BaselineStats; responseTimeMs: BaselineStats },
 ): { decline: boolean; reason: string; score: number } {
   if (recent.length < 3 || base.accuracy.sampleSize < MIN_BASELINE_SAMPLES) {
-    return { decline: false, reason: 'Not enough history yet', score: 0 };
+    return { decline: false, reason: 'Baseline not ready (needs at least 5 sessions)', score: 0 };
   }
   const recentAcc = median(recent.map((r) => r.accuracy));
   const recentRt = median(recent.map((r) => r.responseTimeMs));
