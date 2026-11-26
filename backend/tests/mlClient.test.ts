@@ -8,7 +8,7 @@ describe('mlClient integration and security tests', () => {
   });
 
   it('sends X-ML-Key header and payload to /difficulty', async () => {
-    let capturedHeaders: HeadersInit | undefined;
+    let capturedHeaders: any;
     let capturedBody: any;
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
