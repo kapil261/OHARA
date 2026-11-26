@@ -1,0 +1,90 @@
+# Local environment: frontend + backend + ai + postgres
+# Run from this folder:  cp .env.example .env  &&  docker compose up --build
+name: ohara
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ohara}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ohara}
+      POSTGRES_DB: ${POSTGRES_DB:-ohara}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ohara} -d ${POSTGRES_DB:-ohara}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ai:
+    build:
+      context: ../ai
+      dockerfile: Dockerfile
+    environment:
+      ENVIRONMENT: production
+      # Must be the same value as the backend's ML_API_KEY
+      ML_API_KEY: ${ML_API_KEY:-local-ml-key-change-me-0123456789}
+      BACKEND_ORIGIN: http://backend:4000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: devops-testing/docker/backend.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ohara}:${POSTGRES_PASSWORD:-ohara}@postgres:5432/${POSTGRES_DB:-ohara}
+      DIRECT_URL: postgresql://${POSTGRES_USER:-ohara}:${POSTGRES_PASSWORD:-ohara}@postgres:5432/${POSTGRES_DB:-ohara}
+      JWT_SECRET: ${JWT_SECRET:-local-dev-secret-change-me-please-0123456789}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      APP_URL: ${APP_URL:-http://localhost:5173}
+      ML_URL: http://ai:8000
+      ML_API_KEY: ${ML_API_KEY:-local-ml-key-change-me-0123456789}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      BHASHINI_USER_ID: ${BHASHINI_USER_ID:-}
+      BHASHINI_API_KEY: ${BHASHINI_API_KEY:-}
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: devops-testing/docker/frontend.Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000/api}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:
