@@ -19,17 +19,22 @@ services:
       timeout: 3s
       retries: 10
 
-  # ai:
-  #   build:
-  #     context: ../ai
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "8000:8000"
-  #   healthcheck:
-  #     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-  #     interval: 10s
-  #     timeout: 3s
-  #     retries: 10
+  ai:
+    build:
+      context: ../ai
+      dockerfile: Dockerfile
+    environment:
+      ENVIRONMENT: production
+      # Must be the same value as the backend's ML_API_KEY
+      ML_API_KEY: ${ML_API_KEY:-local-ml-key-change-me-0123456789}
+      BACKEND_ORIGIN: http://backend:4000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   backend:
     build:
@@ -38,8 +43,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      # ai:
-      #   condition: service_healthy
+      ai:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 4000
@@ -48,7 +53,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-dev-secret-change-me-please-0123456789}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       APP_URL: ${APP_URL:-http://localhost:5173}
-      # ML_URL: http://ai:8000
+      ML_URL: http://ai:8000
+      ML_API_KEY: ${ML_API_KEY:-local-ml-key-change-me-0123456789}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
