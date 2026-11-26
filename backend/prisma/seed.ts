@@ -5,6 +5,8 @@
  *   npm run db:seed
  *
  * Sign in with any seeded email; with no SMTP configured the OTP code is printed in the API log.
+ * No phone numbers are seeded on purpose (a made-up number may belong to a real person who would get
+ * the SMS alerts); add your own with POST /api/me/phone to try SMS sign-in.
  */
 import { PrismaClient, type OccurrenceStatus, type ReminderKind, type Role } from '@prisma/client';
 import { recomputeBaselines } from '../src/modules/games/service.js';
@@ -42,6 +44,11 @@ async function wipe() {
   // Children first. Cascades would cover most of this, but being explicit keeps it obvious.
   await prisma.$transaction([
     prisma.auditLog.deleteMany(),
+    prisma.notificationLog.deleteMany(),
+    prisma.visitNote.deleteMany(),
+    prisma.culturePackVersion.deleteMany(),
+    prisma.contentItem.deleteMany(),
+    prisma.culturePack.deleteMany(),
     prisma.reminderEvent.deleteMany(),
     prisma.reminderOccurrence.deleteMany(),
     prisma.reminder.deleteMany(),
@@ -67,7 +74,9 @@ const user = (email: string, name: string, role: Role = 'CAREGIVER') => prisma.u
 /** Reminders + 14 days of occurrences/events. `adherence` is the chance a past reminder was done. */
 async function seedSchedule(patientId: string, items: ReminderSeed[], adherence: number, missEvenings = false) {
   for (const r of items) {
-    const reminder = await prisma.reminder.create({ data: { ...r, patientId, daysOfWeek: [] } });
+    const reminder = await prisma.reminder.create({
+      data: { ...r, patientId, daysOfWeek: [], alertIfMissed: r.kind === 'MEDICINE' || r.kind === 'APPOINTMENT' },
+    });
     for (let i = DAYS - 1; i >= 0; i--) {
       const date = addDays(today, -i);
       const dueAt = zonedTimeToUtc(date, r.time, TZ);
@@ -89,8 +98,10 @@ async function seedSchedule(patientId: string, items: ReminderSeed[], adherence:
           status,
           completedAt,
           notifiedAt: dueAt <= now ? dueAt : null,
-          caregiverNotifiedAt: status === 'MISSED' ? new Date(dueAt.getTime() + 15 * 60_000) : null,
-          emailedAt: status === 'MISSED' ? new Date(dueAt.getTime() + 30 * 60_000) : null,
+          repeatedAt: dueAt <= now && status !== 'DONE' ? new Date(dueAt.getTime() + 10 * 60_000) : null,
+          caregiverNotifiedAt: status === 'MISSED' ? new Date(dueAt.getTime() + 30 * 60_000) : null,
+          smsAt: status === 'MISSED' ? new Date(dueAt.getTime() + 45 * 60_000) : null,
+          emailedAt: status === 'MISSED' ? new Date(dueAt.getTime() + 45 * 60_000) : null,
         },
       });
       if (status !== 'PENDING') {
@@ -130,6 +141,32 @@ async function seedGames(patientId: string, perDay: number, baseAcc: number, bas
   await recomputeBaselines(patientId);
 }
 
+/** Assam pack published (v1), Bodoland draft, Manipur planned. Audio is left for the content team to record. */
+async function seedCulturePacks() {
+  const assam = await prisma.culturePack.create({ data: { region: 'assam', name: 'Assam', languages: ['as', 'hi', 'en'], status: 'DRAFT' } });
+  const items = [
+    { category: 'OBJECT', label: 'Gamosa', labels: { as: 'গামোচা', hi: 'गमछा' }, tags: ['cloth', 'bihu'] },
+    { category: 'OBJECT', label: 'Japi', labels: { as: 'জাপি', hi: 'जापी' }, tags: ['hat'] },
+    { category: 'FOOD', label: 'Pitha', labels: { as: 'পিঠা', hi: 'पीठा' }, tags: ['bihu', 'sweet'] },
+    { category: 'FOOD', label: 'Masor tenga', labels: { as: 'মাছৰ টেঙা', hi: 'मछली टेंगा' }, tags: ['fish'] },
+    { category: 'FESTIVAL', label: 'Bihu dance', labels: { as: 'বিহু নাচ', hi: 'बिहू नृत्य' }, tags: ['rongali'] },
+    { category: 'SOUND', label: 'Pepa', labels: { as: 'পেঁপা', hi: 'पेपा' }, tags: ['music', 'bihu'] },
+    { category: 'SOUND', label: 'Temple bell', labels: { as: 'ঘণ্টা', hi: 'घंटी' }, tags: ['namghar'] },
+    { category: 'ROUTINE', label: 'Morning tea', labels: { as: 'ৰাতিপুৱাৰ চাহ', hi: 'सुबह की चाय' }, tags: ['morning'] },
+  ] as const;
+  for (const [i, it] of items.entries()) {
+    await prisma.contentItem.create({ data: { ...it, tags: [...it.tags], packId: assam.id, sortOrder: i, audio: {} } });
+  }
+  const rows = await prisma.contentItem.findMany({ where: { packId: assam.id }, orderBy: { sortOrder: 'asc' } });
+  const snapshot = rows.map((r) => ({ id: r.id, category: r.category.toLowerCase(), label: r.label, labels: r.labels, tags: r.tags, image: null, audio: {}, sortOrder: r.sortOrder }));
+  await prisma.culturePackVersion.create({ data: { packId: assam.id, version: 1, items: snapshot } });
+  await prisma.culturePack.update({ where: { id: assam.id }, data: { version: 1, status: 'PUBLISHED', publishedAt: now } });
+
+  const bodo = await prisma.culturePack.create({ data: { region: 'bodoland', name: 'Bodoland', languages: ['brx', 'as', 'en'], status: 'DRAFT' } });
+  await prisma.contentItem.create({ data: { packId: bodo.id, category: 'OBJECT', label: 'Dokhona', tags: ['cloth'], audio: {} } });
+  await prisma.culturePack.create({ data: { region: 'manipur', name: 'Manipur', languages: ['mni', 'en'], status: 'PLANNED' } });
+}
+
 async function main() {
   if (process.env.NODE_ENV === 'production' && process.env.SEED_FORCE !== '1') {
     throw new Error('Refusing to wipe a production database. Set SEED_FORCE=1 if you really mean it.');
@@ -156,10 +193,15 @@ async function main() {
       { patientId: bina.id, userId: asha.id, relation: 'ASHA worker · Titabar', memberRole: 'HEALTH_WORKER', permissions: ['view'], hue: 'amber' },
     ],
   });
-  await prisma.consent.create({
-    data: { patientId: bina.id, grantedById: rina.id, scope: 'care_data', guardian: true, text: 'I agree, as Bina’s guardian, to store her reminders, game results and family photos to support her care.' },
+  await prisma.consent.createMany({
+    data: [
+      { patientId: bina.id, grantedById: rina.id, scope: 'care_data', guardian: true, text: 'I agree, as Bina’s guardian, to store her reminders, game results and family photos to support her care.' },
+      { patientId: bina.id, grantedById: rina.id, scope: 'location', guardian: true, text: 'Share Bina’s location with the family when she presses SOS.' },
+    ],
   });
-  await prisma.device.create({ data: { patientId: bina.id, label: 'Bina’s tablet', lastSeenAt: new Date(now.getTime() - 40 * 60_000) } });
+  await prisma.device.create({
+    data: { patientId: bina.id, label: 'Bina’s tablet', model: 'Redmi Pad SE', appVersion: '1.0.3', lastSeenAt: new Date(now.getTime() - 40 * 60_000) },
+  });
   await prisma.familyMember.createMany({
     data: [
       { name: 'Rina', relation: 'Daughter', place: 'Guwahati', hue: 'violet', memory: 'Her wedding at Kamakhya, 2004' },
@@ -179,8 +221,25 @@ async function main() {
       { patientId: bina.id, type: 'MISSED_DOSE', severity: 'WARN', title: 'Water reminder missed', detail: 'No response to the 10:30 AM reminder for 15 minutes.', createdAt: ago(90) },
       { patientId: bina.id, type: 'INACTIVITY', severity: 'INFO', title: 'Lower activity yesterday', detail: 'Played 9 min, below her usual 16 min. One day only — no action needed yet.', createdAt: ago(60 * 20) },
       { patientId: bina.id, type: 'INFO', severity: 'INFO', title: 'Played Memory Match', detail: '12 minutes, finished on a win. Used 2 gentle hints.', createdAt: ago(150) },
-      { patientId: bina.id, type: 'SOS', severity: 'CRITICAL', title: 'SOS pressed', detail: 'Bina pressed SOS. Arup called back and all was well.', createdAt: ago(60 * 24 * 4), acknowledged: true, acknowledgedAt: ago(60 * 24 * 4 - 6), acknowledgedBy: arup.id },
+      {
+        patientId: bina.id,
+        type: 'SOS',
+        severity: 'CRITICAL',
+        title: 'SOS pressed',
+        detail: 'Bina pressed SOS. Arup called back and all was well.',
+        createdAt: ago(60 * 24 * 4),
+        acknowledged: true,
+        acknowledgedAt: ago(60 * 24 * 4 - 6),
+        acknowledgedBy: arup.id,
+        resolved: true,
+        resolvedAt: ago(60 * 24 * 4 - 20),
+        resolvedBy: arup.id,
+        resolutionNote: 'She was looking for her glasses. All fine.',
+      },
     ],
+  });
+  await prisma.visitNote.create({
+    data: { patientId: bina.id, authorId: asha.id, text: 'Home visit: BP 132/84, taking tablets regularly. Enjoys the face game. Asked Rina to add Moni’s new photos.', visitedAt: ago(60 * 24 * 2) },
   });
 
   // --- Other patients for the health-worker list (Mousumi is on every team) ---
@@ -202,7 +261,9 @@ async function main() {
       ],
     });
     await prisma.consent.create({ data: { patientId: p.id, grantedById: cg.id, text: 'Guardian consent for care data.' } });
-    await prisma.device.create({ data: { patientId: p.id, label: `${o.short}’s phone`, lastSeenAt: ago(60 * (o.adherence < 0.8 ? 48 : 3)) } });
+    await prisma.device.create({
+      data: { patientId: p.id, label: `${o.short}’s phone`, model: 'Redmi 9A', appVersion: '1.0.2', lastSeenAt: ago(60 * (o.adherence < 0.8 ? 50 : 3)) },
+    });
     await seedSchedule(p.id, basicReminders(o.cg[1].split(' ')[0]!), o.adherence, o.missEvenings);
     const [perDay, acc, rt, drift] = o.games;
     await seedGames(p.id, perDay, acc, rt, drift);
@@ -213,6 +274,8 @@ async function main() {
       await prisma.alert.create({ data: { patientId: p.id, type: 'DECLINE', severity: 'WARN', title: o.warn, detail: 'Response time is above her own baseline for the last 5 sessions.', createdAt: ago(60 * 5) } });
     }
   }
+
+  await seedCulturePacks();
 
   await prisma.auditLog.create({ data: { actorId: admin.id, action: 'seed.loaded', meta: { at: now.toISOString() } } });
 
@@ -225,6 +288,8 @@ async function main() {
     baselines: await prisma.baseline.count(),
     alerts: await prisma.alert.count(),
     family: await prisma.familyMember.count(),
+    visitNotes: await prisma.visitNote.count(),
+    cultureItems: await prisma.contentItem.count(),
   };
   console.log('Seeded:', counts);
   console.log('Sign in as rina@example.com (caregiver, owner of Bina), arup@example.com, mousumi@example.com / dr.bora@example.com (health workers) or admin@example.com.');

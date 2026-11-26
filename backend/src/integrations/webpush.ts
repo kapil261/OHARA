@@ -1,5 +1,6 @@
 import webpush from 'web-push';
 import { env, features } from '../config/env.js';
+import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 
 if (features.push) webpush.setVapidDetails(env.VAPID_SUBJECT, env.VAPID_PUBLIC_KEY!, env.VAPID_PRIVATE_KEY!);
@@ -32,7 +33,7 @@ export async function pushTo(target: Target, payload: PushPayload): Promise<numb
       } catch (err) {
         const code = (err as { statusCode?: number }).statusCode;
         if (code === 404 || code === 410) await prisma.pushSubscription.delete({ where: { id: s.id } }).catch(() => {});
-        else console.error('[push] failed:', code ?? (err as Error).message);
+        else logger.error({ status: code, err: (err as Error).message }, 'push send failed');
       }
     }),
   );

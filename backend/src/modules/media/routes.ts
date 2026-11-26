@@ -24,11 +24,16 @@ const kind = z
   .transform((s) => s.toUpperCase())
   .pipe(z.nativeEnum(MediaKind));
 
-const mediaDto = (m: Awaited<ReturnType<typeof prisma.mediaItem.findFirstOrThrow>>) => ({
+type MediaRow = Awaited<ReturnType<typeof prisma.mediaItem.findFirstOrThrow>>;
+type Usage = { reminders: number; family: number; profile: boolean };
+
+const mediaDto = (m: MediaRow, usedIn?: Usage) => ({
   id: m.id,
   kind: m.kind.toLowerCase(),
   label: m.label,
   personName: m.personName,
+  purpose: m.purpose,
+  ...(usedIn ? { usedIn } : {}),
   format: m.format,
   bytes: m.bytes,
   url: urlForMedia(m),
@@ -40,12 +45,30 @@ mediaRouter.post('/patients/:patientId/media/sign', requireAuth, requireUser, re
   res.json(signUpload(req.access!.patientId, resourceTypeFor(body.kind)));
 });
 
+// "praise" clips play after a game; "greeting" on the family album; "reminder" for reminder voices.
+const purpose = z.string().trim().max(30);
+
 const registerBody = z.object({
   kind,
   publicId: z.string().min(1).max(255),
   label: z.string().trim().max(80).optional(),
   personName: z.string().trim().max(60).optional(),
+  purpose: purpose.optional(),
 });
+
+/** Where each media item is used (shown next to voice clips: "Used in 2 reminders"). */
+async function usageFor(patientId: string, ids: string[]): Promise<Map<string, Usage>> {
+  const [reminders, family, patient] = await Promise.all([
+    prisma.reminder.findMany({ where: { patientId, OR: [{ voiceMediaId: { in: ids } }, { photoMediaId: { in: ids } }] }, select: { voiceMediaId: true, photoMediaId: true } }),
+    prisma.familyMember.findMany({ where: { patientId, OR: [{ voiceMediaId: { in: ids } }, { photoMediaId: { in: ids } }] }, select: { voiceMediaId: true, photoMediaId: true } }),
+    prisma.patient.findUnique({ where: { id: patientId }, select: { photoMediaId: true, voiceMediaId: true } }),
+  ]);
+  const map = new Map<string, Usage>(ids.map((id) => [id, { reminders: 0, family: 0, profile: false }]));
+  for (const r of reminders) for (const id of [r.voiceMediaId, r.photoMediaId]) if (id && map.has(id)) map.get(id)!.reminders++;
+  for (const f of family) for (const id of [f.voiceMediaId, f.photoMediaId]) if (id && map.has(id)) map.get(id)!.family++;
+  for (const id of [patient?.photoMediaId, patient?.voiceMediaId]) if (id && map.has(id)) map.get(id)!.profile = true;
+  return map;
+}
 
 mediaRouter.post('/patients/:patientId/media', requireAuth, requireUser, requirePatientAccess('upload'), async (req, res) => {
   const body = parse(registerBody, req.body);
@@ -65,6 +88,7 @@ mediaRouter.post('/patients/:patientId/media', requireAuth, requireUser, require
       bytes: info.bytes,
       label: body.label,
       personName: body.personName,
+      purpose: body.purpose,
       uploadedBy: req.auth!.sub,
     },
   });
@@ -74,11 +98,29 @@ mediaRouter.post('/patients/:patientId/media', requireAuth, requireUser, require
 
 mediaRouter.get('/patients/:patientId/media', requireAuth, requirePatientAccess('view', { device: true }), async (req, res) => {
   const k = req.query.kind ? parse(kind, req.query.kind) : undefined;
+  const p = req.query.purpose ? parse(purpose, req.query.purpose) : undefined;
+  const patientId = req.access!.patientId;
   const items = await prisma.mediaItem.findMany({
-    where: { patientId: req.access!.patientId, ...(k ? { kind: k } : {}) },
+    where: { patientId, ...(k ? { kind: k } : {}), ...(p ? { purpose: p } : {}) },
     orderBy: { createdAt: 'desc' },
   });
-  res.json(items.map(mediaDto));
+  const usage = await usageFor(patientId, items.map((m) => m.id));
+  res.json(items.map((m) => mediaDto(m, usage.get(m.id))));
+});
+
+/** Rename a clip or photo, or change who is in it / what it is for. */
+mediaRouter.patch('/patients/:patientId/media/:mediaId', requireAuth, requireUser, requirePatientAccess('upload'), async (req, res) => {
+  const body = parse(
+    z.object({ label: z.string().trim().max(80).nullable().optional(), personName: z.string().trim().max(60).nullable().optional(), purpose: purpose.nullable().optional() }),
+    req.body,
+  );
+  const patientId = req.access!.patientId;
+  const existing = await prisma.mediaItem.findFirst({ where: { id: String(req.params.mediaId), patientId } });
+  if (!existing) throw notFound('Media');
+  const m = await prisma.mediaItem.update({ where: { id: existing.id }, data: body });
+  await audit('media.updated', { actorId: req.auth!.sub, patientId, meta: { mediaId: m.id, fields: Object.keys(body) } });
+  const usage = await usageFor(patientId, [m.id]);
+  res.json(mediaDto(m, usage.get(m.id)));
 });
 
 mediaRouter.delete('/patients/:patientId/media/:mediaId', requireAuth, requireUser, requirePatientAccess('delete'), async (req, res) => {

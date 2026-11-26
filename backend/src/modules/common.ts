@@ -33,6 +33,7 @@ export async function patientDto(p: Patient, baselines?: Baseline[]) {
     place: p.place ?? '',
     language: p.language,
     timezone: p.timezone,
+    voiceAnswers: p.voiceAnswers,
     baseline:
       acc && rt
         ? { accuracy: acc.median, responseTimeMs: Math.round(rt.median), computedAt: acc.computedAt.toISOString() }
@@ -43,6 +44,8 @@ export async function patientDto(p: Patient, baselines?: Baseline[]) {
 }
 
 const ALERT_TYPE = { DECLINE: 'decline', MISSED_DOSE: 'missed_dose', SOS: 'sos', INACTIVITY: 'inactivity', INFO: 'info' } as const;
+
+export const alertStatus = (a: Pick<Alert, 'acknowledged' | 'resolved'>) => (a.resolved ? 'resolved' : a.acknowledged ? 'acknowledged' : 'open');
 
 /** Alert DTO: frontend `Alert` fields plus demo `CareAlert` fields (level/title/detail/time). */
 export function alertDto(a: Alert, timeZone = 'Asia/Kolkata') {
@@ -58,19 +61,25 @@ export function alertDto(a: Alert, timeZone = 'Asia/Kolkata') {
     message: a.detail ? `${a.title}. ${a.detail}` : a.title,
     acknowledged: a.acknowledged,
     acknowledgedAt: a.acknowledgedAt?.toISOString() ?? null,
+    status: alertStatus(a),
+    resolved: a.resolved,
+    resolvedAt: a.resolvedAt?.toISOString() ?? null,
+    resolutionNote: a.resolutionNote,
+    location: a.location ?? null,
     createdAt: a.createdAt.toISOString(),
     time: a.createdAt.toLocaleTimeString('en-IN', { timeZone, hour: 'numeric', minute: '2-digit', hour12: true }),
   };
 }
 
-/** Care-team members who want notifications (for email + push escalation). */
+/** Care-team members who want notifications (push to everyone; email / SMS per member preference). */
 export async function notifiableTeam(patientId: string) {
   const members = await prisma.careTeamMember.findMany({
     where: { patientId },
-    include: { user: { select: { id: true, email: true, name: true } } },
+    include: { user: { select: { id: true, email: true, phone: true, name: true } } },
   });
   return {
     userIds: members.map((m) => m.userId),
-    emails: members.filter((m) => m.notifyEmail).map((m) => m.user.email),
+    emails: members.filter((m) => m.notifyEmail && m.user.email).map((m) => m.user.email!),
+    phones: members.filter((m) => m.notifySms && m.user.phone).map((m) => m.user.phone!),
   };
 }

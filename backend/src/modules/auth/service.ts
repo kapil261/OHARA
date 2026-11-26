@@ -1,62 +1,96 @@
 import type { Response } from 'express';
-import { env, isProd } from '../../config/env.js';
+import { env, features, isProd } from '../../config/env.js';
 import { sendMail, simpleHtml } from '../../integrations/mailer.js';
+import { sendOtpSms } from '../../integrations/sms.js';
 import { audit } from '../../lib/audit.js';
 import { prisma } from '../../lib/prisma.js';
 import { signAccessToken } from '../../lib/tokens.js';
+import { normalizeEmail, normalizePhone } from '../../utils/contact.js';
 import { otpCode, randomToken, safeEqualHex, sha256 } from '../../utils/crypto.js';
-import { AppError, badRequest, tooMany, unauthenticated } from '../../utils/errors.js';
+import { AppError, badRequest, tooMany, unauthenticated, unavailable } from '../../utils/errors.js';
 
 export const REFRESH_COOKIE = 'ohara_rt';
 const OTP_PER_HOUR = 5;
 
-export const normalizeEmail = (e: string) => e.trim().toLowerCase();
+export { normalizeEmail };
 
-export async function requestOtp(rawEmail: string) {
-  const email = normalizeEmail(rawEmail);
+/** Where a sign-in code goes. A bare string is treated as an email (original API). */
+export type Contact = string | { email: string } | { phone: string };
+
+function resolveContact(c: Contact): { channel: 'email' | 'phone'; identifier: string } {
+  if (typeof c === 'string') return { channel: 'email', identifier: normalizeEmail(c) };
+  if ('email' in c) return { channel: 'email', identifier: normalizeEmail(c.email) };
+  const phone = normalizePhone(c.phone);
+  if (!phone) throw badRequest('Enter a valid Indian mobile number');
+  return { channel: 'phone', identifier: phone };
+}
+
+export async function requestOtp(contact: Contact) {
+  const { channel, identifier } = resolveContact(contact);
+  // In production a channel without a provider would silently drop the code.
+  if (isProd && channel === 'phone' && !features.sms) throw unavailable('SMS_NOT_CONFIGURED', 'Sign-in by SMS is not available. Please use email.');
+  if (isProd && channel === 'email' && !features.smtp) throw unavailable('EMAIL_NOT_CONFIGURED', 'Sign-in by email is not available. Please use your mobile number.');
+
   const since = new Date(Date.now() - 60 * 60_000);
-  const recent = await prisma.otpCode.count({ where: { email, createdAt: { gte: since } } });
+  const recent = await prisma.otpCode.count({ where: { identifier, createdAt: { gte: since } } });
   if (recent >= OTP_PER_HOUR) throw tooMany('Too many codes requested. Please wait a while and try again.');
 
   const code = otpCode();
   // Only one live code at a time.
-  await prisma.otpCode.updateMany({ where: { email, consumed: false }, data: { consumed: true } });
+  await prisma.otpCode.updateMany({ where: { identifier, consumed: false }, data: { consumed: true } });
   await prisma.otpCode.create({
-    data: { email, codeHash: sha256(`${email}:${code}`), expiresAt: new Date(Date.now() + env.OTP_TTL_MIN * 60_000) },
+    data: { identifier, codeHash: sha256(`${identifier}:${code}`), expiresAt: new Date(Date.now() + env.OTP_TTL_MIN * 60_000) },
   });
-  await sendMail({
-    to: email,
-    subject: `Your OHARA sign-in code: ${code}`,
-    text: `Your OHARA sign-in code is ${code}. It expires in ${env.OTP_TTL_MIN} minutes. If you did not ask for this, ignore this email.`,
-    html: simpleHtml('Your sign-in code', [
-      `Use this code to sign in to OHARA: ${code}`,
-      `It expires in ${env.OTP_TTL_MIN} minutes. If you did not ask for this, you can ignore this email.`,
-    ]),
-  });
-  return { sent: true, expiresInSec: env.OTP_TTL_MIN * 60 };
+  if (channel === 'phone') {
+    await sendOtpSms(identifier, code, env.OTP_TTL_MIN);
+  } else {
+    await sendMail({
+      to: identifier,
+      subject: `Your OHARA sign-in code: ${code}`,
+      text: `Your OHARA sign-in code is ${code}. It expires in ${env.OTP_TTL_MIN} minutes. If you did not ask for this, ignore this email.`,
+      html: simpleHtml('Your sign-in code', [
+        `Use this code to sign in to OHARA: ${code}`,
+        `It expires in ${env.OTP_TTL_MIN} minutes. If you did not ask for this, you can ignore this email.`,
+      ]),
+    });
+  }
+  return { sent: true, channel, expiresInSec: env.OTP_TTL_MIN * 60 };
 }
 
-export async function verifyOtp(rawEmail: string, code: string) {
-  const email = normalizeEmail(rawEmail);
-  const otp = await prisma.otpCode.findFirst({ where: { email, consumed: false }, orderBy: { createdAt: 'desc' } });
+export async function verifyOtp(contact: Contact, code: string) {
+  const { channel, identifier } = await checkOtp(contact, code);
+  const key = channel === 'phone' ? { phone: identifier } : { email: identifier };
+  const user = await prisma.user.upsert({
+    where: key,
+    create: { ...key, lastLoginAt: new Date() },
+    update: { lastLoginAt: new Date() },
+  });
+  await audit('auth.login', { actorId: user.id, meta: { method: channel === 'phone' ? 'sms_otp' : 'email_otp' } });
+  return user;
+}
+
+/** Check and consume a code for `contact`. Throws on a wrong, expired or exhausted code. */
+export async function checkOtp(contact: Contact, code: string) {
+  const resolved = resolveContact(contact);
+  const { identifier } = resolved;
+  const otp = await prisma.otpCode.findFirst({ where: { identifier, consumed: false }, orderBy: { createdAt: 'desc' } });
   if (!otp || otp.expiresAt < new Date()) throw badRequest('This code has expired. Please request a new one.');
-  if (otp.attempts >= env.OTP_MAX_ATTEMPTS) {
+  // Claim an attempt atomically so parallel guesses cannot exceed OTP_MAX_ATTEMPTS.
+  const claimed = await prisma.otpCode.updateMany({
+    where: { id: otp.id, consumed: false, attempts: { lt: env.OTP_MAX_ATTEMPTS } },
+    data: { attempts: { increment: 1 } },
+  });
+  if (!claimed.count) {
     await prisma.otpCode.update({ where: { id: otp.id }, data: { consumed: true } });
     throw tooMany('Too many wrong attempts. Please request a new code.');
   }
-  if (!safeEqualHex(otp.codeHash, sha256(`${email}:${code}`))) {
-    await prisma.otpCode.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+  if (!safeEqualHex(otp.codeHash, sha256(`${identifier}:${code}`))) {
     throw new AppError(400, 'INVALID_OTP', 'That code is not right. Please check and try again.');
   }
-  await prisma.otpCode.update({ where: { id: otp.id }, data: { consumed: true } });
-
-  const user = await prisma.user.upsert({
-    where: { email },
-    create: { email, lastLoginAt: new Date() },
-    update: { lastLoginAt: new Date() },
-  });
-  await audit('auth.login', { actorId: user.id, meta: { method: 'email_otp' } });
-  return user;
+  // Consume atomically so the same code cannot sign in twice.
+  const consumed = await prisma.otpCode.updateMany({ where: { id: otp.id, consumed: false }, data: { consumed: true } });
+  if (!consumed.count) throw badRequest('This code has already been used. Please request a new one.');
+  return resolved;
 }
 
 export async function userAccessToken(userId: string) {

@@ -66,3 +66,27 @@ export async function destroyResource(publicId: string, resourceType: ResourceTy
   const c = client();
   await c.uploader.destroy(publicId, { resource_type: resourceType, type: 'authenticated', invalidate: true });
 }
+
+/** Shared (non-personal) content such as culture-pack images and sounds: public assets in their own folder. */
+export const contentFolder = (packId: string) => `${env.CLOUDINARY_FOLDER}/content/${packId}`;
+
+export function signContentUpload(packId: string, resourceType: ResourceType) {
+  const c = client();
+  const timestamp = Math.round(Date.now() / 1000);
+  const folder = contentFolder(packId);
+  const params = { timestamp, folder };
+  const signature = c.utils.api_sign_request(params, env.CLOUDINARY_API_SECRET!);
+  return {
+    uploadUrl: `https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`,
+    fields: { ...params, api_key: env.CLOUDINARY_API_KEY!, signature },
+    resourceType,
+  };
+}
+
+/** Public URL for shared content. Values that are already http(s) URLs are returned unchanged. */
+export function contentUrl(value: string | null | undefined, resourceType: ResourceType): string | undefined {
+  if (!value) return undefined;
+  if (/^https?:\/\//.test(value)) return value;
+  if (!features.cloudinary) return undefined;
+  return client().url(value, { resource_type: resourceType, secure: true });
+}

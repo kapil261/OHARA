@@ -1,5 +1,6 @@
 import nodemailer, { type Transporter } from 'nodemailer';
-import { env, features, isTest } from '../config/env.js';
+import { env, features, isProd, isTest } from '../config/env.js';
+import { logger } from '../lib/logger.js';
 
 let transporter: Transporter | null = null;
 function getTransport(): Transporter | null {
@@ -21,8 +22,9 @@ export interface Mail {
 }
 
 /**
- * Send an email. Without SMTP configured (local dev) the message is printed to the
- * console instead, so OTP codes and alerts are still visible.
+ * Send an email. Without SMTP configured (local dev only; production refuses to start)
+ * the message is printed to the console instead, so OTP codes and alerts are still visible.
+ * Message contents are never logged in production.
  * Returns true when it was handed to SMTP.
  */
 export async function sendMail(mail: Mail): Promise<boolean> {
@@ -30,14 +32,14 @@ export async function sendMail(mail: Mail): Promise<boolean> {
   if (!to) return false;
   const t = getTransport();
   if (!t) {
-    if (!isTest) console.log(`\n[mail:console] To: ${to}\nSubject: ${mail.subject}\n${mail.text}\n`);
+    if (!isProd && !isTest) console.log(`\n[mail:console] To: ${to}\nSubject: ${mail.subject}\n${mail.text}\n`);
     return false;
   }
   try {
     await t.sendMail({ from: env.MAIL_FROM, to, subject: mail.subject, text: mail.text, html: mail.html });
     return true;
   } catch (err) {
-    console.error('[mail] send failed:', (err as Error).message);
+    logger.error({ err: (err as Error).message }, 'mail send failed');
     return false;
   }
 }

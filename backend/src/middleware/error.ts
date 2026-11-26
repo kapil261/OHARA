@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
 import { isProd } from '../config/env.js';
+import { logger } from '../lib/logger.js';
 import { AppError } from '../utils/errors.js';
 
 export function notFoundHandler(req: Request, res: Response) {
@@ -10,7 +11,8 @@ export function notFoundHandler(req: Request, res: Response) {
 
 // Express recognises error handlers by their 4 arguments, so `_next` must stay.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  const log = req.log ?? logger;
   if (err instanceof AppError) {
     return res.status(err.status).json({ error: { code: err.code, message: err.message, details: err.details } });
   }
@@ -22,7 +24,7 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     if (err.code === 'P2025') return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Not found' } });
   }
   if (err instanceof Prisma.PrismaClientInitializationError) {
-    console.error('[db] cannot reach the database:', err.message);
+    log.error({ err: err.message }, 'database unreachable');
     return res.status(503).json({ error: { code: 'DB_UNAVAILABLE', message: 'Database is not reachable. Check DATABASE_URL.' } });
   }
   const e = err as { type?: string; status?: number };
@@ -32,8 +34,8 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
   if (e?.type === 'entity.too.large') {
     return res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large' } });
   }
-  console.error('[error]', err);
+  log.error({ err }, 'unhandled error');
   res.status(500).json({
-    error: { code: 'INTERNAL', message: isProd ? 'Something went wrong' : String((err as Error)?.message ?? err) },
+    error: { code: 'INTERNAL', message: isProd ? 'Something went wrong' : String((err as Error)?.message ?? err), requestId: req.id },
   });
 }

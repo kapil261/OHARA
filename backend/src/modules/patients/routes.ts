@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit } from '../../lib/audit.js';
+import { CONSENT_SCOPES } from '../../lib/consent.js';
 import { prisma } from '../../lib/prisma.js';
 import { parse } from '../../lib/validate.js';
 import { ALL_PERMISSIONS, requirePatientAccess } from '../../middleware/access.js';
@@ -20,6 +21,7 @@ const patientFields = {
   place: z.string().trim().max(80).optional(),
   language: z.string().trim().min(2).max(30).optional(),
   timezone: tz.optional(),
+  voiceAnswers: z.boolean().optional(),
 };
 
 /**
@@ -34,6 +36,8 @@ patientsRouter.post('/patients', requireAuth, requireUser, async (req, res) => {
       relation: z.string().trim().max(40).optional(),
       consent: z.literal(true, { errorMap: () => ({ message: 'Consent is required to continue' }) }),
       consentText: z.string().max(2000).optional(),
+      // Which kinds of data the guardian agrees to. Default: care_data (reminders, games, analytics). Location is opt-in.
+      consentScopes: z.array(z.enum(CONSENT_SCOPES)).min(1).max(CONSENT_SCOPES.length).optional(),
     }),
     req.body,
   );
@@ -47,12 +51,14 @@ patientsRouter.post('/patients', requireAuth, requireUser, async (req, res) => {
         place: body.place,
         language: body.language ?? 'English',
         timezone: body.timezone ?? 'Asia/Kolkata',
+        voiceAnswers: body.voiceAnswers ?? true,
       },
     });
     await tx.careTeamMember.create({
       data: { patientId: p.id, userId, relation: body.relation, isOwner: true, permissions: [...ALL_PERMISSIONS] },
     });
-    await tx.consent.create({ data: { patientId: p.id, grantedById: userId, text: body.consentText } });
+    const scopes = [...new Set(body.consentScopes ?? ['care_data'])];
+    await tx.consent.createMany({ data: scopes.map((scope) => ({ patientId: p.id, grantedById: userId, scope, text: body.consentText })) });
     await tx.user.update({
       where: { id: userId },
       data: { activePatientId: p.id, ...(body.caregiverName ? { name: body.caregiverName } : {}) },
