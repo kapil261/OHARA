@@ -43,19 +43,27 @@ export async function recomputeBaselines(patientId: string) {
   return metrics;
 }
 
-/** After a session: check for decline (ML first, local fallback) and raise at most one DECLINE alert per day. */
+/** After a session: check for decline (ML first with personal baseline, local fallback) and raise at most one DECLINE alert per day. */
 export async function checkDecline(patientId: string) {
   const recent = await prisma.gameSession.findMany({ where: { patientId }, orderBy: { playedAt: 'desc' }, take: RECENT_SESSIONS });
+  const bl = await prisma.baseline.findMany({ where: { patientId } });
+  const acc = bl.find((b) => b.metric === 'accuracy');
+  const rt = bl.find((b) => b.metric === 'responseTimeMs');
+
+  const baselineMap: Record<string, { median: number; ewma: number; std: number; count: number }> = {};
+  if (acc) baselineMap.accuracy = { median: acc.median, ewma: acc.ewma, std: acc.std, count: acc.sampleSize };
+  if (rt) baselineMap.responseTimeMs = { median: rt.median, ewma: rt.ewma, std: rt.std, count: rt.sampleSize };
+
   const ml = await mlDecline({
     patientId,
     sessions: recent.map((s) => ({ accuracy: s.accuracy, responseTimeMs: s.responseTimeMs, playedAt: s.playedAt.toISOString() })),
+    baseline: baselineMap,
   });
+
   let result: { decline: boolean; reason?: string; score?: number };
-  if (ml) result = ml;
-  else {
-    const bl = await prisma.baseline.findMany({ where: { patientId } });
-    const acc = bl.find((b) => b.metric === 'accuracy');
-    const rt = bl.find((b) => b.metric === 'responseTimeMs');
+  if (ml) {
+    result = ml;
+  } else {
     if (!acc || !rt) return { decline: false, reason: 'No baseline yet' };
     result = detectDeclineLocally(recent, { accuracy: acc, responseTimeMs: rt });
   }

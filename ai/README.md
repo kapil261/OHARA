@@ -1,117 +1,174 @@
 # OHARA – AI / ML Service
 
-**Owner:** Anya Jain | **Branch:** `feature/ml-service`
+**Owner:** Anya Jain | **Branch:** `Anya/feat/AI-LLM`
 
-Python FastAPI service that adapts game difficulty to each elder and detects cognitive decline against their own personal baseline. It is called by the backend only (never directly by the frontend).
+FastAPI microservice providing adaptive cognitive game difficulty (Elo rating with errorless learning) and personal baseline cognitive decline detection (Z-scores with multi-day persistence filtering) for dementia care. It is called by the OHARA backend only (never directly by the frontend).
 
-> OHARA supports care and early detection. It does **not** diagnose. Outputs are flags for a caregiver or doctor to review.
+> **Clinical Notice:** OHARA supports cognitive care and early detection monitoring. It does **not** provide clinical diagnosis. Outputs are alerting signals for caregivers and clinicians to review.
 
-## Tech Stack
-Python 3.11, FastAPI, Uvicorn, pandas, NumPy, scikit-learn, Pydantic, pytest, Docker.
+---
 
-## Folder Structure
-```
-ai/
-├── app/
-│   ├── main.py            # FastAPI app, routes
-│   ├── schemas.py         # Pydantic request/response models
-│   ├── difficulty/
-│   │   └── elo.py         # Elo-based adaptive difficulty
-│   ├── baseline/
-│   │   └── baseline.py    # 14-day median + EWMA
-│   ├── decline/
-│   │   └── detector.py    # z-score decline detection
-│   └── config.py          # thresholds, constants
-├── simulation/
-│   └── simulate.py        # synthetic patients to tune thresholds
-├── notebooks/             # experiments (optional)
-├── tests/
-├── requirements.txt
-├── Dockerfile
-└── README.md
-```
+## Tech Stack & Dependency Optimization
+Lean, pinned dependencies for minimal Docker image size and rapid cold starts:
+- **Python**: 3.12 (`FROM python:3.12-slim`)
+- **fastapi** `==0.115.6`
+- **uvicorn[standard]** `==0.32.1`
+- **pydantic** `==2.14.3`
+- **numpy** `==1.26.3`
+- **pytest** `==8.3.4`
+- **httpx** `==0.28.1`
 
-## Features
+*(Note: Unused dependencies `pandas` and `scikit-learn` were eliminated to drastically reduce container footprint and build time).*
 
-### 1. Adaptive difficulty (Elo, errorless learning)
-- Each elder has a skill rating per game; each level has a difficulty rating.
-- After a round: `expected = 1 / (1 + 10^((difficulty - skill) / 400))`, then `skill += K * (outcome - expected)`.
-- Goal: keep success around **75–80% (target 78%)**. If recent success is above target, raise the level; below, lower it.
-- Hints are not counted as failures (errorless learning). A hinted success counts as a partial success (e.g. 0.7).
-- Level changes are limited to one step per session so the game never jumps suddenly.
+---
 
-### 2. Personal baseline
-- Metrics per patient: game accuracy, response time, reminder compliance, session frequency.
-- Initial baseline = **median of the first 14 days**.
-- After that, updated with an **EWMA**: `baseline = alpha * today + (1 - alpha) * baseline` (alpha around 0.1–0.2).
-- Elders are compared only with their own baseline, never with other people.
+## Security & Architecture
 
-### 3. Decline detection (z-score)
-- `z = (recent_mean - baseline) / baseline_std` over a recent window (e.g. last 7 days).
-- Flag when z is beyond a threshold on a metric, and it persists for several days (to avoid one bad day).
-- Severity: mild / moderate / sharp, from z magnitude and number of metrics affected.
-- Cold start: no decline flags until the 14-day baseline exists.
+### 1. Authentication (`X-ML-Key` Header)
+- All computational endpoints (`/difficulty`, `/baseline`, `/decline`) require the `X-ML-Key` header matching `ML_API_KEY`.
+- **Production Guard:** In production (`ENVIRONMENT=production` or `NODE_ENV=production`), both the AI microservice and backend **refuse to start** if `ML_API_KEY` is not explicitly set in the environment or if it contains a `dev-only` placeholder.
+- **Local Development:** A development placeholder (`dev-only-ml-secret-key`) is permitted for local offline developer workflows.
+- Requests without a valid key return `401 Unauthorized`.
+- `/health` and `/version` remain open for orchestrator liveness and status checks.
 
-## API (called by the backend)
-| Endpoint | Request | Response |
-|---|---|---|
-| `POST /difficulty` | `{ patientId, game, history[] }` | `{ level, skill, targetSuccess }` |
-| `POST /baseline` | `{ patientId, metrics[] }` | `{ median, ewma, std }` |
-| `POST /decline` | `{ patientId, recent[], baseline }` | `{ declined, zScore, metric, severity }` |
-| `GET /health` | | `{ status: "ok" }` |
+### 2. Locked-Down CORS
+- **Production:** Restricts CORS strictly to the configured `BACKEND_ORIGIN` (no localhost, no wildcard `*`).
+- **Development:** Permits `localhost:4000`, `127.0.0.1:4000`, and `localhost:5173`.
 
-Example:
+### 3. Unified Success Target
+- Both the AI microservice and backend local heuristics share an identical target success rate of **78% (`TARGET_SUCCESS_RATE = 0.78`)**.
+
+### 4. Self-Baseline Comparison & Cold Start Handling
+- The `/decline` endpoint evaluates elders strictly against their own established normal (never arbitrary population thresholds).
+- **New Patients (< 14 days):** During the first ~14 days (or when no baseline exists yet in the database), `/decline` returns:
+  `{ "decline": false, "score": 0.0, "reason": "Baseline not ready (establishing 14-day calibration period)" }`.
+  It never crashes and suppresses false alarms.
+
+---
+
+## Baseline Architecture & Ownership Note
+- **Database Ownership:** In OHARA's architecture, baseline calculation and persistence are owned and stored by the backend (`recomputeBaselines()` in `backend/src/modules/games/service.ts` writing to PostgreSQL `Baseline` table).
+- **Stateless AI Integration:** The backend sends the patient's database-stored baseline metrics (`accuracy` and `responseTimeMs`) inside the `POST /decline` request. The AI microservice computes the Z-scores and evaluates multi-day persistence across recent game sessions.
+- **`/baseline` Endpoint Status:** The `POST /baseline` endpoint in this service is maintained as an optional standalone/stateless calculation endpoint, but is not called directly by the backend runtime.
+
+---
+
+## Unified API Contract (Agreed with Backend)
+
+### 1. `POST /difficulty`
+Calculates next adaptive level using Elo rating with errorless learning dignity credit (hinted successes count as 0.7 partial credit). Level changes are clamped to at most ±1 per session.
+
+**Headers:** `X-ML-Key: <ML_API_KEY>`, `Content-Type: application/json`
+
+**Request:**
 ```json
-POST /decline
-{ "patientId": "p1",
-  "recent": [{"metric":"accuracy","values":[0.5,0.45,0.4]}],
-  "baseline": {"accuracy":{"ewma":0.78,"std":0.06}} }
+{
+  "patientId": "p-101",
+  "gameId": "memory-match",
+  "level": 2,
+  "accuracy": 0.85,
+  "responseTimeMs": 1400.0,
+  "hintsUsed": 1
+}
 ```
+
+**Response:**
 ```json
-{ "declined": true, "zScore": -5.9, "metric": "accuracy", "severity": "sharp" }
+{
+  "patientId": "p-101",
+  "gameId": "memory-match",
+  "game": "memory-match",
+  "level": 3,
+  "skill": 1220.5,
+  "targetSuccess": 0.78,
+  "targetSuccessRate": 0.78,
+  "reason": "Recent accuracy 0.85 above target 0.78 -> advance level to 3"
+}
 ```
-The contract matches `backend/README.md`. Tell Abhishek before changing any field.
+*Backend reads: `level`.*
 
-## Simulation and Tuning
-Three synthetic patient types are generated: **stable**, **slow decline**, **sharp decline**. Run them through the baseline and detector to tune thresholds so that:
-- stable patients rarely trigger alerts (low false positives)
-- sharp decline is caught within a few days
-- slow decline is caught eventually without noisy alerts
+---
 
-Report precision, recall and detection delay in `simulation/` results. A real pilot study is planned later; until then, state clearly that this is not clinically validated.
+### 2. `POST /decline`
+Evaluates multi-day performance against the patient's personal baseline using Z-scores. Requires multi-day persistence (minimum 3 sessions or all available if ≥2) to avoid false alarms from transient bad days. Cold start baseline calibration (< 14 days) suppresses alarms.
 
-## Privacy
-Receives only numeric metrics and a patient ID (no names, photos, audio or phone numbers). No data is stored in this service; it is stateless and the backend holds all records.
+**Headers:** `X-ML-Key: <ML_API_KEY>`, `Content-Type: application/json`
 
-## Setup
+**Request:**
+```json
+{
+  "patientId": "p-101",
+  "sessions": [
+    { "accuracy": 0.45, "responseTimeMs": 3500.0, "playedAt": "2026-11-25T10:00:00.000Z" },
+    { "accuracy": 0.40, "responseTimeMs": 3600.0, "playedAt": "2026-11-25T11:00:00.000Z" },
+    { "accuracy": 0.42, "responseTimeMs": 3400.0, "playedAt": "2026-11-25T12:00:00.000Z" }
+  ],
+  "baseline": {
+    "accuracy": { "median": 0.80, "ewma": 0.78, "std": 0.06, "count": 14 },
+    "responseTimeMs": { "median": 1800.0, "ewma": 1800.0, "std": 200.0, "count": 14 }
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "patientId": "p-101",
+  "decline": true,
+  "declined": true,
+  "score": -5.92,
+  "zScore": -5.92,
+  "metric": "accuracy",
+  "severity": "sharp",
+  "flagged": true,
+  "persistenceCount": 3,
+  "reason": "Metric 'accuracy' recent mean is 0.423 vs baseline EWMA 0.780 (z=-5.95). Persisted for 3/3 recent observations."
+}
+```
+*Backend reads: `decline`, `score`, `reason`.*
+
+---
+
+### 3. `GET /version`
+Telemetry endpoint reporting service version, target success rate, and active mathematical models.
+
+**Response:**
+```json
+{
+  "service": "ohara-ai",
+  "version": "1.0.0",
+  "targetSuccessRate": 0.78,
+  "models": {
+    "difficulty": "Elo Rating (errorless learning dignity credit 0.7, step clamp +/-1)",
+    "baseline": "14-day Median Bootstrap + EWMA (alpha=0.08)",
+    "decline": "Z-score Multi-day Persistence Filter (>=3 days, elder self-baseline)"
+  }
+}
+```
+
+---
+
+### 4. `GET /health`
+Liveness probe for orchestrators and Docker health checks.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "service": "ohara-ai",
+  "version": "1.0.0"
+}
+```
+
+---
+
+## Setup & Testing
+
+### Run Tests:
 ```bash
 cd ai
-python -m venv .venv
-.venv\Scripts\activate          # Windows
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-pytest
+pytest -q
 ```
 
-`requirements.txt` (starting point):
-```
-fastapi
-uvicorn[standard]
-pydantic
-numpy
-pandas
-scikit-learn
-pytest
-httpx
-```
-
-## Task Checklist
-- [ ] M6: FastAPI skeleton, `/health`, Pydantic schemas
-- [ ] M6: Elo difficulty with errorless hint handling
-- [ ] M7: baseline (14-day median + EWMA)
-- [ ] M7: z-score decline detector with persistence rule
-- [ ] M7: simulation of stable / slow / sharp patients and threshold tuning
-- [ ] M8: pytest unit tests, Dockerfile, integration test with backend
-
-## Conventions
-Branch from `main`, PR into `main` with one review. Type-hint all functions, keep thresholds in `config.py`, never commit data files with real patient information or keys.
+All 32 test cases pass cleanly across Elo difficulty, 14-day bootstrap, EWMA updates, cold start suppression, multi-day persistence filtering, empty sessions, single session isolation, extreme response times, API key enforcement, and `/version`.

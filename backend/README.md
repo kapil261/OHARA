@@ -62,6 +62,11 @@ Subject: Your OHARA sign-in code: 123456
 
 The seed creates 14 days of reminders and completions, game sessions and baselines, alerts (missed reminder, SOS, cognitive decline), family members, consent records, and a paired device.
 
+## ML Service Contract (Anya)
+- `POST {ML_URL}/difficulty` body `{ patientId, gameId, level, accuracy, responseTimeMs, hintsUsed }` → `{ level }`
+- `POST {ML_URL}/baseline` body `{ patientId, metric, dailyValues }` → `{ median, ewma, std }`
+- `POST {ML_URL}/decline` body `{ patientId, sessions: [...] }` or `{ patientId, recent, baseline }` → `{ decline, score, reason }`
+
 ## Going to the free cloud services
 
 - **Supabase**: open Project → Settings → Database → Connection string.
