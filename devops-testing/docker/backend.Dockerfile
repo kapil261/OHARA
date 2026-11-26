@@ -20,5 +20,6 @@ COPY --from=build /app/backend/dist ./dist
 COPY --from=build /app/backend/prisma ./prisma
 COPY backend/package.json ./
 EXPOSE 4000
-# No prisma/migrations folder yet, so create/update tables with `db push`, then start the API.
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/server.js"]
+
+# Apply the committed Prisma migrations, then start the API.
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]
