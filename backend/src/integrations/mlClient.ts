@@ -1,4 +1,5 @@
 import { env, features, isProd } from '../config/env.js';
+import { logger } from '../lib/logger.js';
 
 /**
  * Client for the optional ML service (FastAPI in ai/). Every call returns null when
@@ -21,15 +22,15 @@ async function call<T>(path: string, body: unknown): Promise<T | null> {
     });
     if (!res.ok) {
       if (res.status === 401) {
-        console.warn(`[ml] ML auth failed: check ML_API_KEY (endpoint ${path} returned 401 Unauthorized)`);
+        logger.warn({ path, status: 401 }, 'ML auth failed: check ML_API_KEY');
       } else {
-        console.warn(`[ml] ${path} returned HTTP ${res.status}: ${res.statusText}`);
+        logger.warn({ path, status: res.status }, 'ML request failed, using local fallback');
       }
       return null;
     }
     return (await res.json()) as T;
   } catch (err) {
-    console.warn(`[ml] ${path} unavailable, using local fallback:`, (err as Error).message);
+    logger.warn({ path, err: (err as Error).message }, 'ML service unavailable, using local fallback');
     return null;
   }
 }

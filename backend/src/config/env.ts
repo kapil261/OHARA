@@ -44,14 +44,30 @@ const schema = z.object({
   ML_URL: z.string().optional(),
   ML_TIMEOUT_MS: z.coerce.number().default(3000),
   ML_API_KEY: z.string().optional(),
+  ML_HEALTH_TIMEOUT_MS: z.coerce.number().default(1500),
 
   BHASHINI_USER_ID: z.string().optional(),
   BHASHINI_API_KEY: z.string().optional(),
   BHASHINI_PIPELINE_ID: z.string().default('64392f96daac500b55c543cd'),
 
-  MISSED_AFTER_MIN: z.coerce.number().default(15),
-  EMAIL_AFTER_MIN: z.coerce.number().default(30),
+  // SMS via MSG91 (DLT-approved Flow templates). Blank = SMS disabled.
+  MSG91_AUTH_KEY: z.string().optional(),
+  MSG91_SENDER_ID: z.string().optional(),
+  MSG91_OTP_TEMPLATE_ID: z.string().optional(),
+  MSG91_ALERT_TEMPLATE_ID: z.string().optional(),
+
+  // Reminder escalation ladder, minutes after the reminder is due.
+  REPEAT_AFTER_MIN: z.coerce.number().default(10),
+  MISSED_AFTER_MIN: z.coerce.number().default(30),
+  SMS_AFTER_MIN: z.coerce.number().default(45),
+  EMAIL_AFTER_MIN: z.coerce.number().default(45),
+  MAX_SNOOZES: z.coerce.number().int().min(0).default(2),
+  // Raise a "phone offline" alert after this many hours without contact.
+  DEVICE_SILENT_HOURS: z.coerce.number().default(48),
+  // Days a deleted patient can be restored before everything is purged.
+  DELETE_GRACE_DAYS: z.coerce.number().default(30),
   ENABLE_JOBS: bool(true),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -64,13 +80,17 @@ export const env = parsed.data;
 export const isProd = env.NODE_ENV === 'production';
 export const isTest = env.NODE_ENV === 'test';
 
-if (isProd && env.JWT_SECRET.startsWith('dev-only')) {
-  console.error('JWT_SECRET must be set in production.');
-  process.exit(1);
+// Production must fail fast on unsafe config instead of running half-secured.
+const prodErrors: string[] = [];
+if (isProd) {
+  if (env.JWT_SECRET.startsWith('dev-only') || env.JWT_SECRET.length < 32) prodErrors.push('JWT_SECRET must be set to at least 32 characters.');
+  if (env.ML_URL && (!env.ML_API_KEY || env.ML_API_KEY.startsWith('dev-only'))) prodErrors.push('ML_API_KEY must be set when ML_URL is configured.');
+  // Without a delivery channel nobody can receive a sign-in code, and the dev console fallback would leak codes into logs.
+  if (!env.SMTP_HOST && !env.MSG91_AUTH_KEY) prodErrors.push('SMTP_HOST or MSG91_AUTH_KEY must be set in production (sign-in codes need a delivery channel).');
+  if (!env.DATABASE_URL) prodErrors.push('DATABASE_URL must be set in production.');
 }
-
-if (isProd && Boolean(env.ML_URL) && (!env.ML_API_KEY || env.ML_API_KEY.startsWith('dev-only'))) {
-  console.error('ML_API_KEY must be set in production when ML_URL is configured.');
+if (prodErrors.length) {
+  console.error(`Refusing to start in production:\n- ${prodErrors.join('\n- ')}`);
   process.exit(1);
 }
 
@@ -80,4 +100,5 @@ export const features = {
   push: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY),
   bhashini: Boolean(env.BHASHINI_USER_ID && env.BHASHINI_API_KEY),
   ml: Boolean(env.ML_URL),
+  sms: Boolean(env.MSG91_AUTH_KEY && env.MSG91_OTP_TEMPLATE_ID),
 };

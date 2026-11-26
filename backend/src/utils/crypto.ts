@@ -4,8 +4,11 @@ export const sha256 = (value: string) => createHash('sha256').update(value).dige
 
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
+/** Random numeric code of `len` digits (leading zeros kept). */
+export const numericCode = (len = 6) => String(randomInt(0, 10 ** len)).padStart(len, '0');
+
 /** 6-digit numeric OTP. */
-export const otpCode = () => String(randomInt(0, 1_000_000)).padStart(6, '0');
+export const otpCode = () => numericCode(6);
 
 // No 0/O/1/I so the code is easy to read aloud on the patient screen.
 const PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

@@ -25,8 +25,15 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     // Device tokens are long-lived, so check revocation on every request.
     const device = await prisma.device.findUnique({ where: { id: payload.sub } });
     if (!device || device.revokedAt) throw unauthenticated('This device has been unpaired');
-    if (!device.lastSeenAt || Date.now() - device.lastSeenAt.getTime() > SEEN_THROTTLE_MS) {
-      await prisma.device.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } });
+    // The patient app may send X-App-Version / X-Device-Model so the Device page stays current.
+    const appVersion = req.get('x-app-version')?.slice(0, 20);
+    const model = req.get('x-device-model')?.slice(0, 60);
+    const infoChanged = (appVersion && appVersion !== device.appVersion) || (model && model !== device.model);
+    if (infoChanged || !device.lastSeenAt || Date.now() - device.lastSeenAt.getTime() > SEEN_THROTTLE_MS) {
+      await prisma.device.update({
+        where: { id: device.id },
+        data: { lastSeenAt: new Date(), ...(appVersion ? { appVersion } : {}), ...(model ? { model } : {}) },
+      });
     }
   }
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mlDecline, mlDifficulty } from '../src/integrations/mlClient.js';
+import { logger } from '../src/lib/logger.js';
 import { nextLevel } from '../src/modules/games/service.js';
 
 describe('mlClient integration and security tests', () => {
@@ -8,7 +9,7 @@ describe('mlClient integration and security tests', () => {
   });
 
   it('sends X-ML-Key header and payload to /difficulty', async () => {
-    let capturedHeaders: HeadersInit | undefined;
+    let capturedHeaders: RequestInit['headers'];
     let capturedBody: any;
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
@@ -31,7 +32,7 @@ describe('mlClient integration and security tests', () => {
 
     expect(res).not.toBeNull();
     expect(res?.level).toBe(3);
-    expect(capturedHeaders).toHaveProperty('X-ML-Key');
+    expect(capturedHeaders).toHaveProperty('X-ML-Key', 'test-ml-key');
     expect(capturedBody).toHaveProperty('patientId', 'patient-test-1');
   });
 
@@ -66,7 +67,7 @@ describe('mlClient integration and security tests', () => {
   });
 
   it('logs prominent warning and falls back to local logic when the AI service returns 401 Unauthorized', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(logger, 'warn');
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       return new Response(JSON.stringify({ detail: 'Unauthorized' }), {
@@ -87,6 +88,7 @@ describe('mlClient integration and security tests', () => {
     expect(mlRes).toBeNull();
     // Confirms clear, non-silent auth warning logged
     expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 401 }),
       expect.stringContaining('ML auth failed: check ML_API_KEY'),
     );
 

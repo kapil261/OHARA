@@ -17,3 +17,5 @@ export const apiLimiter = make(60_000, 300, 'Too many requests, slow down a litt
 export const otpLimiter = make(15 * 60_000, 5, 'Too many code requests. Try again in 15 minutes.');
 export const authLimiter = make(15 * 60_000, 30, 'Too many sign-in attempts. Try again later.');
 export const pairingLimiter = make(60_000, 60, 'Too many pairing requests');
+// 6-digit codes are guessable, so claiming is limited much harder.
+export const pairClaimLimiter = make(15 * 60_000, 10, 'Too many tries. Please wait a few minutes and ask your family for a new code.');
